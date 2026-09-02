@@ -1,0 +1,633 @@
+================================================================================
+COMPLETE PARTS LIST — MINI SUMO ROBOT BUILD
+Taxi Project — sabinm1243@gmail.com
+Generated: 2026-07-03
+================================================================================
+
+This document combines all 21 items from parts_list.txt into a single reference.
+Duplicated item types (wires, screws) are merged.
+
+================================================================================
+INDEX
+================================================================================
+ 1. M3 Brass Hot Melt Insert (OD 5mm, L=7mm, 30pcs)
+ 2. Super Soft Silicone Wires — 26 AWG & 28 AWG (combined)
+ 3. Security Torx Bit T10, 1/4" Hex Shank, 3" Long (2pcs)
+ 4. Stainless Steel GB2672 Six-Lobe Torx Screws — M3×35mm & M3×50mm (combined)
+ 5. Aluminum Sheet 1mm × 100mm × 100mm (5pcs)
+ 6. Lead Strips Tin Roll — 240g, 48-52pcs, 13×100mm×0.3mm
+ 7. ICM20602 6-Axis Sensor (Gyro + Accelerometer)
+ 8. QRE1113 IR Reflective Line Sensor
+ 9. JS2622S Steel-Silicone Wheel Set
+10. JS2622 Replacement Silicone Tires (Rezerve)
+11. Xmotion V3 — Arduino All-in-One Robot Controller
+12. Core 6V Motor — JSUMO 400RPM (2×)
+13. START-STOP NanoLabs Robot Starter Module
+14. Kanzawa ShadowEdge Black Blade (10pcs)
+15. M60F ToF Mini Sumo Sensor (5×)
+16. WS2812 5050 RGB LED Ring (7 Bits)
+17. Polymaker PolyMax Tough PC Filament — Black, 750g
+18. 3M 9448A Double-Sided Adhesive Tape — 12mm × 50m
+19. TATTU 11.4V 300mAh 75C LiHV Battery (5pcs)
+
+================================================================================
+
+
+================================================================================
+1. M3 BRASS HOT MELT INSERT (OD 5mm, Length 7mm, 30pcs)
+================================================================================
+
+Product: M3 Brass Hot Melt Insert Nuts
+Thread Size: M3 (3mm inner diameter)
+Outer Diameter (OD): 5mm
+Length: 7mm
+Quantity: 30 pcs
+Material: Brass
+Knurling: Double-knurled for superior grip
+
+Typical Use:
+- Heat-set into 3D printed plastic parts (PLA, ABS, PETG, Nylon, PC)
+- Used in keyboard building, robotics, and general DIY enclosures
+- Provides strong threaded inserts in plastic parts for repeated screw fastening
+
+Installation Temperature by Plastic Type:
+- PLA: 350-400°F (175-205°C), 2-3 sec insertion, 30 sec cool
+- ABS: 400-450°F (205-230°C), 2-3 sec insertion, 30 sec cool
+- PETG: 425-475°F (220-245°C), 3-4 sec insertion, 45 sec cool
+- Nylon: 450-500°F (230-260°C), 3-4 sec insertion, 60 sec cool
+- Polycarbonate: 475-525°F (245-275°C), 3-4 sec insertion, 60 sec cool
+
+Hole Sizing:
+- Hole diameter for M3 insert: ~4.0mm
+- Boss OD (minimum): 6.5mm
+- Wall thickness (minimum): 0.95mm
+
+Tips:
+- Use temperature-controlled soldering iron or dedicated heat-set tool
+- Hold insert perpendicular to surface for straight installation
+- Apply steady, even pressure; if sinking too deep, reduce temperature
+- Practice on scrap parts first to dial in settings
+
+Source: Albany County Fasteners heat-set insert specs, diykeyboards.com
+
+
+================================================================================
+2. SUPER SOFT SILICONE WIRES (Combined: 26 AWG & 28 AWG)
+================================================================================
+
+Product: Super Soft Silicone Wire
+Insulation: Silicone — ultra-flexible, won't melt during soldering
+Rated Voltage: 600V (typical)
+Temperature Range: -60°C to +200°C
+Test Voltage: 2000V
+
+--- Wire A: Red, 26 AWG (0.15mm²), 5m ---
+Color: Red
+Gauge: 26 AWG
+Cross-sectional Area: 0.15mm²
+Length: 5 meters
+Core: ~40-strand tinned copper wire
+Current Rating: ~2-3A continuous
+
+Best for: Battery leads, motor wires, sensor wiring, RC/drone power
+
+--- Wire B: Red AND Black, 28 AWG (0.08mm²), 5m each ---
+Colors: Red + Black
+Gauge: 28 AWG
+Cross-sectional Area: 0.08mm²
+Length: 5m each (10m total)
+Core: ~16-strand tinned copper wire
+Outer Diameter: ~1.2mm
+Current Rating: ~1-2A continuous
+
+Best for: Signal lines, sensor wiring, LED strips, fine/low-power connections
+
+Source: Generic silicone wire specifications (AliExpress, eBay, DHGate sellers)
+
+
+================================================================================
+3. SECURITY TORX BIT — T10, 1/4" HEX SHANK, 3" LONG (2pcs)
+================================================================================
+
+Product: Security Torx Bit (Tamper-Proof)
+Size: T10
+Shank: 1/4" Hex
+Length: 3 inches (~76mm)
+Quantity: 2 pcs
+Material: Typically S2 or chrome-vanadium steel
+
+Features:
+- Security/Tamper-Proof — has center hole to fit over pin in security Torx screws
+- T10 fits all GB2672 M3 six-lobe Torx screws in this build
+- 1/4" hex shank fits standard bit holders, drills, and impact drivers
+- 3" extended reach for recessed screws
+
+Source: General Torx bit specifications, Amazon, eBay listings
+
+
+================================================================================
+4. STAINLESS STEEL GB2672 SIX-LOBE TORX SCREWS (Combined: M3×35mm & M3×50mm)
+================================================================================
+
+Product: Six-Lobe Torx Pan Head Screws
+Standard: GB2672 (Chinese equivalent to DIN/ISO 14583)
+Material: 304 Stainless Steel (A2-70)
+Drive: Six-Lobe Torx (pan head)
+Torx Bit Required: T10
+Head Style: Pan Round Head / Button Head
+
+--- M3 × 35mm (50pcs) ---
+Thread: M3 × 0.5mm (standard metric coarse)
+Length: 35mm
+Quantity: 50 pcs
+Best for: General assembly, thinner joints, sensor mounting
+
+--- M3 × 50mm (50pcs) ---
+Thread: M3 × 0.5mm (standard metric coarse)
+Length: 50mm
+Quantity: 50 pcs
+Best for: Structural connections, thick assemblies, standoffs
+
+Key Features (both sizes):
+- 304 stainless steel — excellent corrosion resistance
+- Torx drive: better torque transfer, less cam-out than Phillips/hex
+- Less likely to strip during repeated assembly/disassembly
+- Ideal for robotics, electronics, indoor/outdoor use
+
+Additional note: More standard size Torx M3 screws are available in inventory.
+
+Source: Amazon, AliExpress, eBay product listings
+
+
+================================================================================
+5. ALUMINUM SHEET — 1mm × 100mm × 100mm (5pcs)
+================================================================================
+
+Product: Aluminum Sheet/Plate
+Thickness: 1mm
+Dimensions: 100mm × 100mm
+Quantity: 5 pcs
+Likely Grade: 1060 (pure aluminum)
+
+Properties:
+- Density: ~2.7 g/cm³ (each sheet ~27g)
+- Non-magnetic, non-sparking
+- Excellent thermal and electrical conductivity
+- Natural protective oxide layer (no rust)
+
+Working Tips:
+- Can be cut with tin snips, hacksaw, or Dremel
+- Can be drilled with standard HSS bits
+- Can be bent by hand or with pliers (1mm is workable)
+- Use files/sandpaper for edge finishing
+
+Common Uses: Robot chassis plates, motor/sensor brackets, heat sinks, shielding
+
+Source: Metal Supermarkets, Amazon aluminum sheet listings
+
+
+================================================================================
+6. LEAD STRIPS TIN ROLL — 240g, 48-52 Pcs, 13mm × 100mm × 0.3mm
+================================================================================
+
+Product: Lead Strips / Tin-Lead Alloy Solder Strips
+Material: Lead (Pb) / Tin-Lead alloy
+Color: Silver
+Weight: 240 grams total (approximate)
+Quantity: 48-52 pieces
+Dimensions (per strip): 13mm width × 100mm length × 0.3mm thickness
+
+Description:
+Made of high-quality material, durable and practical to use. Pre-cut strip form
+allows precise placement for consistent solder joints.
+
+Typical Alloy: Sn63/Pb37 (63% tin, 37% lead) — eutectic, melts at 183°C
+
+Advantages of Strip Form:
+- Consistent solder quantity per joint
+- No flux core — add flux separately for best results
+- Easy to position and hold for soldering
+- Also suitable for reflow soldering and hot plate work
+
+Uses: PCB/perfboard soldering, wire-to-connector joints, battery tabs,
+       general electronics repair and prototyping
+
+----- Arduino Soldering Quick Guide -----
+
+Tools needed: Soldering iron (350-400°C), flux, perfboard, helping hands
+
+1. Prototype on breadboard first — test everything before soldering
+2. Heat the JOINT (pad + lead), not the solder strip directly
+3. Touch solder to the hot joint — it should flow and form a shiny cone
+4. Let cool naturally; don't blow on it
+5. Use IC sockets instead of soldering chips directly
+6. Hot glue provides strain relief for wire connections
+7. Clean flux residue with isopropyl alcohol
+
+// Example: Blink LED (test on breadboard, then solder to perfboard)
+void setup() { pinMode(13, OUTPUT); }
+void loop() { digitalWrite(13, HIGH); delay(1000); digitalWrite(13, LOW); delay(1000); }
+
+// Example: QRE1113 line sensor reading (soldered to perfboard → Arduino)
+const int lineSensorPin = A0;
+void setup() { Serial.begin(9600); }
+void loop() {
+  int val = analogRead(lineSensorPin);
+  Serial.println(val);             // White > 500, Black < 300
+  if (val < 400) { /* LINE! */ }
+  delay(100);
+}
+
+SAFETY: Contains lead — use ventilation, wash hands after handling. Not for plumbing.
+
+Source: Techspray, SparkFun, Arduino docs, maker product listings
+
+
+================================================================================
+7. ICM20602 — 6-AXIS MEMS MOTION SENSOR (Gyro + Accelerometer)
+================================================================================
+
+Manufacturer: TDK InvenSense
+Type: 3-Axis Gyroscope + 3-Axis Accelerometer
+Package: 16-pin LGA, 3×3×0.75mm
+
+Specifications:
+- Gyro Range: ±250/±500/±1000/±2000 dps (programmable)
+- Gyro Sensitivity: 16.4 LSB/dps (at ±2000 dps)
+- Accel Range: ±2/±4/±8/±16g (programmable)
+- Resolution: 16-bit ADC
+- Output Rate: up to 8 kHz (gyro), 4 kHz (accel)
+- Voltage: 1.71V to 3.6V
+- Interface: SPI (up to 10 MHz) and I²C (up to 400 kHz)
+- FIFO: 1KB on-chip buffer
+- DMP: On-chip Digital Motion Processor
+- Noise: Gyro 4 mdps/√Hz, Accel 100 μg/√Hz
+- I²C Address: 0x68 (AD0=0) or 0x69 (AD0=1)
+
+Features: Low noise, low power, on-chip sensor fusion, temperature sensor,
+          EIS support, Android-compatible. Newer/better than MPU6050.
+
+Uses: Mini sumo orientation/motion tracking, drone stabilization, VR/AR
+
+Source: TDK InvenSense datasheets, CirkitDesigner, EDOM Technology
+
+
+================================================================================
+8. QRE1113 — IR REFLECTIVE OBJECT / LINE SENSOR, 5V
+================================================================================
+
+Manufacturer: Fairchild Semiconductor (onsemi)
+Type: IR LED + Phototransistor (Reflective)
+
+Specifications:
+- IR Wavelength: 940 nm (peak)
+- IR LED VF: 1.2V typ, 1.6V max (@ 20mA)
+- IR LED Max Current: 50 mA continuous
+- Phototransistor VCEO: 30V max
+- Phototransistor IC: 20 mA max
+- Sensing Distance: ~3mm optimal
+- Rise/Fall Time: ~20 µs
+
+Package: QRE1113 (through-hole) or QRE1113GR (SMT gull-wing)
+Body footprint: 2.90 × 2.50mm
+
+Application Circuit:
+- IR LED: VCC → 220Ω resistor → LED anode; cathode → GND
+- Phototransistor: Collector → 10kΩ-47kΩ pull-up to VCC; Emitter → GND
+- White surface → output LOW; Black surface → output HIGH
+- Read via MCU ADC or comparator
+
+Uses: Mini sumo edge/line detection, line-following robots, proximity sensing
+
+Source: Fairchild/onsemi QRE1113 datasheet (SparkFun CDN)
+
+
+================================================================================
+9. JS2622S — STEEL-SILICONE WHEEL SET (26mm × 22mm)
+================================================================================
+
+Manufacturer: JSUMO
+Model: JS2622S (Steel hub variant — "S" suffix)
+
+Specifications:
+- Wheel Diameter: 26.5mm
+- Wheel Width: 22mm
+- Silicone Tire Width: 19mm
+- Weight: ~25g per wheel
+- Shore Hardness: 20 Shore A (very soft, high grip)
+- Center Hole: 3mm (D-shaft compatible)
+- Set Screw: M4 tapped
+- Material: Steel hub + Silicone tire
+
+Features:
+- Very soft 20A silicone tread for maximum dohyo traction
+- Steel hub adds weight (beneficial for mini sumo pushing power)
+- Direct fit on JSUMO Core 6V motor shafts (3mm D-shaft)
+- M4 set screw for secure shaft locking
+- Comes as pair (2 wheels)
+
+Comparison: JS2622 (Aluminum hub, ~13g) vs JS2622S (Steel hub, ~25g)
+
+Source: JSUMO official product page, Cytron, RobotShop, Waslleh, Lunox Robotics
+
+
+================================================================================
+10. JS2622 — REPLACEMENT SILICONE TIRES (Rezerve)
+================================================================================
+
+Product: JSUMO JS2622 Replacement Silicone Tires
+Compatibility: JS2622 and JS2622S wheel hubs
+
+Specifications:
+- Tire Diameter: Fits 26.5mm wheel hub
+- Tire Width: 19mm (silicone contact surface)
+- Shore Hardness: 20 Shore A
+- Material: High-traction silicone
+- Quantity: Pair (2 tires)
+
+Purpose: Spare tires for competition — quick swap when originals wear.
+"Rezerve" = spare part designation.
+
+Source: JSUMO official products, Cytron, Waslleh
+
+
+================================================================================
+11. XMOTION V3 — ARDUINO ALL-IN-ONE ROBOT CONTROLLER
+================================================================================
+
+Manufacturer: JSUMO
+Type: Integrated robot control board (MCU + dual motor driver + regulator)
+
+Specifications:
+- Microcontroller: Arduino-compatible (ATmega328P-based)
+- Dimensions: 80mm × 30mm × 12mm
+- Input Voltage: 7-28V DC
+- Motor Channels: 2 independent H-bridges
+- Motor Current: 6 Amps per channel (2× 6A)
+- Voltage Regulator: Switching, 1600mA (1.6A)
+- USB: Micro USB for programming
+- Programming: Arduino IDE compatible
+
+Features:
+- All-in-one: eliminates separate Arduino + driver + regulator wiring
+- Short circuit protection on motor outputs
+- Compact design optimized for mini sumo (500g class)
+- Standard Arduino Nano pinout for sensors and modules
+
+Source: RobotShop, JSUMO, E-Robots product listings
+
+
+================================================================================
+12. CORE 6V MOTOR — JSUMO 400RPM (2×)
+================================================================================
+
+Manufacturer: JSUMO
+Model: Core 6V 400 RPM
+Quantity: 2 motors
+
+Specifications (from JSUMO Datasheet):
+- Nominal Voltage: 6V DC
+- Power: 4.2 Watts
+- No-Load Speed: 400 RPM @ 6V
+- Gear Ratio: 48:1
+- Continuous Torque @ 6V: 1.2 kg-cm
+- Stall Torque @ 6V: 3.9 kg-cm
+- No-Load Current @ 6V: 120 mA
+- Stall Current @ 6V: 3200 mA (3.2A)
+- Dimensions: 47mm (L) × 15mm (D) × 10mm (body)
+- Shaft: D-shaft, 3mm diameter, 8mm exposed
+- Weight: 21 grams each
+
+Notes:
+- Can run up to 16V for short bursts (3S/4S LiPo OK)
+- 400 RPM × 26.5mm wheels ≈ 555 mm/s theoretical speed
+- Direct fit for JS2622/JS2622S wheels (3mm D-shaft)
+- Used by competitive mini sumo teams worldwide
+
+Source: JSUMO official product page, JSUMO Core-6V-400 Datasheet PDF
+
+
+================================================================================
+13. START-STOP NanoLabs — ROBOT STARTER MODULE
+================================================================================
+
+Product: MicroStart Sumo & Minisumo Robot Start Module
+Likely Source: NanoLabs / JSUMO MicroStart
+
+Specifications:
+- Voltage: 5V and 3.3V compatible
+- Size: ~12.6mm × 15.4mm × 8mm
+- Indicators: Blue LED (Start), Red LED (Stop)
+- Output: Digital — HIGH when start signal detected
+
+Function:
+- Detects official sumo competition start signal (modulated IR/visible light)
+- Provides clean digital output → connect to any MCU digital input
+- Robot starts autonomously when signal received — no manual button press
+- Required by most competition rules; ensures fair simultaneous start
+
+Source: JSUMO MicroStart datasheet (RobotShop), general sumo start module specs
+
+
+================================================================================
+14. KANZAWA SHADOWEDGE BLACK BLADE (10pcs)
+================================================================================
+
+Manufacturer: Kanzawa (Japan) / Sumozade
+Type: Mini sumo robot competition blade/wedge
+
+Specifications:
+- Weight: 7 grams each
+- Dimensions: 100mm × 15mm × 0.25mm
+- Material: Hardened steel with special black finish
+- Edge: Two-sided angled edge
+
+Purpose:
+- Front wedge to slide under opponent, breaking their traction
+- Thin 0.25mm edge gets under wheels/blade of opponent
+- Two-sided angle keeps front edge pressed to dohyo surface
+- "Choice of Winners" — top competitive teams use Japanese blades
+
+Mounting:
+- Attach to front of chassis with double-sided tape (3M 9448A)
+- Position as low as possible without dragging on surface
+- Should extend full width of robot front
+- 10pcs = spares for wear/damage during competition rounds
+
+Source: Sumozade.com product page, Lunox Robotics
+
+
+================================================================================
+15. M60F — ToF MINI SUMO SENSOR (5×)
+================================================================================
+
+Manufacturer: SoBotz
+Type: Time-of-Flight (ToF) laser ranging opponent detection sensor
+
+Specifications:
+- Dimensions: 7mm × 7mm × 9mm (world's smallest mini sumo sensor)
+- Detection Range: 5mm-600mm (configurable); up to 1m max
+- Weight: ~2g each
+- Output Modes: Digital (default), PWM, OneWire
+
+Output Details:
+1. Digital — HIGH when opponent detected within threshold
+2. PWM — analog distance reading
+3. OneWire — daisy-chain multiple sensors on ONE MCU pin
+
+Features:
+- ToF technology: more accurate than IR, less affected by ambient light/surface color
+- OneWire mode saves MCU I/O pins
+- GitHub library available for easy Arduino integration
+- Configurable thresholds, output modes, filtering
+- Designed specifically for mini sumo competitions
+
+Placement: 5 sensors = front + left + right coverage + redundancy
+
+Source: SoBotz official product page, M60F GitHub repository
+
+
+================================================================================
+16. WS2812 5050 RGB LED RING — 7 BITS
+================================================================================
+
+Product: WS2812B 5050 RGB LED Ring Module
+
+Specifications:
+- LED Type: WS2812B (NeoPixel-compatible)
+- LED Package: 5050 SMD (5.0 × 5.0mm)
+- Number of LEDs: 7 (circular arrangement)
+- Outer Diameter: ~23mm
+- Voltage: 5V DC
+- Current: ~18mA per LED (full white) → ~126mA total (7 LEDs)
+- Communication: Single-wire NZR protocol, 800 kbps
+- Color: 24-bit (16.7M colors), 8-bit per channel
+- Each LED individually addressable — data cascades DIN→DOUT
+
+Pinout: VCC (5V), GND, DIN (data in), DOUT (data out for chaining)
+
+Libraries: Adafruit NeoPixel, FastLED, WS2812FX
+
+Uses: Robot status indicator, visual feedback (search/attack/idle modes),
+      decorative lighting, quick visual diagnostics
+
+Source: WS2812 datasheet (Adafruit CDN), Botland.store, ElectroPeak
+
+
+================================================================================
+17. POLYMAKER POLYMAX TOUGH PC FILAMENT — Black, 750g
+================================================================================
+
+Manufacturer: Polymaker
+Product Line: PolyMax (nanoreinforced)
+Material: Engineered Polycarbonate (PC)
+Color: Black (Hex: #181617)
+Weight: 750g spool (±20g)
+Diameter: 1.75mm
+Diameter Accuracy: 99% within ±0.03mm
+
+Print Settings:
+- Nozzle Temperature: 250-270°C
+- Bed Temperature: 90-105°C (heated bed REQUIRED)
+- Bed Surface: PEI sheet, BuildTak, or PC-friendly adhesive recommended
+- Enclosure: Highly recommended (PC is warp-prone)
+- Cooling Fan: None or minimal (10-20%) to prevent warping
+
+Key Properties:
+- Excellent impact resistance (PolyMax nanoreinforcement technology)
+- High tensile strength
+- Heat deflection temperature: ~110-120°C
+- Excellent layer adhesion (PolyMax = improved interlayer bonding)
+- Comparable to nylon in toughness but stiffer
+
+Printing Tips:
+- DRY before printing: 70-80°C for 4-6 hours (PC absorbs moisture)
+- Store in sealed container with desiccant
+- First layer: slow, hot, well-squished
+- Use glue stick or Magigoo PC for bed adhesion
+
+Uses: Robot chassis, motor mounts, impact-resistant armor, structural parts
+
+Source: Polymaker PolyMax PC PIS V1.2, Polymaker official product page
+
+
+================================================================================
+18. 3M 9448A — DOUBLE-SIDED ADHESIVE TAPE, 12mm × 50m
+================================================================================
+
+Manufacturer: 3M
+Product: 3M 9448A Double Coated Tissue Tape
+
+Specifications:
+- Width: 12mm
+- Length: 50m
+- Carrier: Non-woven tissue paper (white)
+- Adhesive: Acrylic pressure-sensitive
+- Total Thickness: 0.15mm (150 microns)
+- Liner: Glassine paper (~0.12mm)
+- Temperature: 70°C long-term, up to 150°C short-term
+- Color: Translucent/clear on white carrier
+
+Features:
+- Medium-hard acrylic adhesive with high initial tack
+- Excellent adhesion to metals, plastics, painted surfaces, glass
+- Good shear strength (resists sliding)
+- Moisture and temperature resistant
+- Dimensionally stable (non-woven carrier)
+
+Applications:
+- Mounting Kanzawa blades/wedges to robot chassis
+- Attaching sensors and small modules
+- General robotics assembly
+- Electronics mounting
+
+Preparation: Clean surfaces with isopropyl alcohol, apply firm pressure,
+             full bond strength develops in ~24 hours
+
+Source: 3M 9448A Technical Data Sheet (DigiKey), CDRmarket
+
+
+================================================================================
+19. TATTU 11.4V 300mAh 75C LiHV BATTERY (5pcs)
+================================================================================
+
+Manufacturer: GensTattu
+Type: High Voltage Lithium Polymer (LiHV)
+Configuration: 3S1P
+Quantity: 5 pcs
+
+Specifications:
+- Nominal Voltage: 11.4V (3.8V/cell × 3)
+- Full Charge (LiHV): 13.05V (4.35V/cell)
+- Capacity: 300mAh (minimum)
+- Continuous Discharge: 75C → 22.5 Amps
+- Max Burst Discharge: 150C → 45 Amps
+- Dimensions: ~68mm × 12mm × 6mm
+- Weight: ~8g (±5g)
+
+LiHV vs Standard LiPo:
+- LiHV charges to 4.35V/cell (vs 4.20V for LiPo)
+- Extra voltage = more motor speed and power
+- Can be charged as standard LiPo (to 4.20V/cell) for longer lifespan
+- Storage voltage: 3.80-3.85V/cell
+
+Charging:
+- MUST use LiHV-capable charger (LiHV mode, 4.35V/cell)
+- Charge at 0.3-1.5A (1C-5C), balance charge ALWAYS
+- Never exceed 4.35V per cell
+
+Run Time Estimate (mini sumo):
+- 300mAh / (2 motors × ~1.2A each typical) ≈ 7.5 minutes
+- Burst current capability for aggressive pushing
+
+SAFETY:
+- Charge in fireproof LiPo bag, store in fireproof container
+- Never overcharge, over-discharge, puncture, or short
+- Dispose of swollen/damaged batteries properly
+
+Source: GensTattu official product page, general LiHV battery specifications
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================

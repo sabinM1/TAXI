@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TAXI — PID Tuning Tool</title>
+    <style>
+        :root {
+            --bg: #1a1a2e;
+            --panel: #16213e;
+            --accent: #e94560;
+            --text: #eee;
+            --text-dim: #999;
+            --border: #333;
+            --green: #4ecca3;
+            --yellow: #f0c040;
+            --blue: #4da6ff;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            line-height: 1.6;
+            padding: 20px;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        h1 { color: var(--accent); font-size: 1.8em; margin-bottom: 5px; }
+        h2 { color: var(--green); font-size: 1.2em; margin: 25px 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
+        h3 { color: var(--blue); font-size: 1em; margin: 15px 0 8px; }
+        .subtitle { color: var(--text-dim); font-size: 0.9em; margin-bottom: 20px; }
+        .panel {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin: 15px 0;
+        }
+        .row { display: flex; gap: 15px; align-items: center; flex-wrap: wrap; }
+        .col { flex: 1; min-width: 200px; }
+        label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: var(--text-dim);
+            font-size: 0.85em;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        input[type="range"] {
+            width: 100%;
+            accent-color: var(--accent);
+            margin: 8px 0;
+        }
+        input[type="number"] {
+            width: 100%;
+            padding: 8px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text);
+            font-size: 1em;
+            font-family: 'Consolas', monospace;
+        }
+        .value-display {
+            font-family: 'Consolas', monospace;
+            font-size: 1.4em;
+            color: var(--green);
+            text-align: center;
+            padding: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.95em;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-primary:hover { background: #c73550; }
+        .btn-secondary { background: var(--panel); color: var(--text); border: 1px solid var(--border); }
+        .btn-secondary:hover { background: #1e2a45; }
+        .btn-green { background: var(--green); color: #000; }
+        .btn-green:hover { background: #3db88f; }
+        .code-block {
+            background: #0d0d1a;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 15px;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 0.85em;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            color: #a0d0ff;
+        }
+        .step-indicator {
+            display: flex;
+            gap: 5px;
+            margin: 15px 0;
+        }
+        .step-dot {
+            width: 30px; height: 30px; border-radius: 50%;
+            background: var(--panel); border: 2px solid var(--border);
+            display: flex; align-items: center; justify-content: center;
+            font-weight: bold; font-size: 0.8em;
+        }
+        .step-dot.active { border-color: var(--accent); background: var(--accent); color: #fff; }
+        .step-dot.done { border-color: var(--green); background: var(--green); color: #000; }
+        .step-label { font-size: 0.7em; color: var(--text-dim); text-align: center; margin-top: 3px; }
+        .export-section { margin-top: 20px; }
+        .tab { display: inline-block; padding: 8px 16px; cursor: pointer; border-radius: 4px 4px 0 0; margin-right: 2px; background: var(--panel); border: 1px solid var(--border); border-bottom: none; color: var(--text-dim); }
+        .tab.active { background: var(--bg); color: var(--text); border-bottom: 2px solid var(--accent); }
+        .tab-content { display: none; background: var(--bg); border: 1px solid var(--border); border-radius: 0 0 8px 8px; padding: 20px; }
+        .tab-content.active { display: block; }
+    </style>
+</head>
+<body>
+
+<h1>🔧 TAXI — PID Tuning Tool</h1>
+<p class="subtitle">Companion tool for TAXI Mini Sumo Firmware v1.0<br>
+Tune one parameter at a time with guided steps. Export the final values for Config.h.</p>
+
+<!-- TUNING MODE TABS -->
+<div style="margin-top: 20px;">
+    <span class="tab active" onclick="switchTab('guided')">🎯 Guided Tuning</span>
+    <span class="tab" onclick="switchTab('expert')">⚡ Expert Mode</span>
+    <span class="tab" onclick="switchTab('strategy')">🗺️ Strategy Editor</span>
+</div>
+
+<!-- GUIDED TUNING -->
+<div id="tab-guided" class="tab-content active">
+    <div class="panel">
+        <h2>Guided 5-Step Tuning Process</h2>
+        <p style="color: var(--text-dim); margin-bottom: 15px;">
+            Follow each step in order. Tune one parameter at a time while others stay at defaults.
+            Load each tuned value onto the robot and test before moving to the next step.
+        </p>
+
+        <div class="step-indicator">
+            <div style="text-align: center;">
+                <div class="step-dot active" id="dot1">1</div>
+                <div class="step-label">Base Speed</div>
+            </div>
+            <div style="text-align: center;">
+                <div class="step-dot" id="dot2">2</div>
+                <div class="step-label">Kp Lock</div>
+            </div>
+            <div style="text-align: center;">
+                <div class="step-dot" id="dot3">3</div>
+                <div class="step-label">Kd Track</div>
+            </div>
+            <div style="text-align: center;">
+                <div class="step-dot" id="dot4">4</div>
+                <div class="step-label">Distance Zones</div>
+            </div>
+            <div style="text-align: center;">
+                <div class="step-dot" id="dot5">5</div>
+                <div class="step-label">Export</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- STEP 1: BASE SPEED -->
+    <div class="panel" id="step1">
+        <h3>Step 1: Attack Base Speed (PID_BASE_SPEED_ATTACK)</h3>
+        <p style="color: var(--text-dim);">Robot's forward speed % when attacking. Higher = faster closing but harder to control. Start at 60, increase until wobble appears, then back off 10.</p>
+        <div class="row">
+            <div class="col" style="flex:2">
+                <input type="range" id="baseSpeedSlider" min="30" max="100" value="80" oninput="updateBaseSpeed()">
+            </div>
+            <div class="col" style="flex:0.5">
+                <div class="value-display" id="baseSpeedVal">80</div>
+            </div>
+        </div>
+        <p style="color: var(--text-dim); font-size: 0.8em; margin-top: 5px;">
+            💡 <b>Test:</b> Robot should track opponent smoothly without overshooting. If it wobbles left-right, reduce speed.
+        </p>
+    </div>
+
+    <!-- STEP 2: KP LOCK -->
+    <div class="panel" id="step2">
+        <h3>Step 2: Lock-On Gain (PID_KP_LOCK)</h3>
+        <p style="color: var(--text-dim);">Aggressiveness of initial centering when opponent first detected. Higher = faster snap-to-center. Too high causes oscillation on first contact.</p>
+        <div class="row">
+            <div class="col" style="flex:2">
+                <input type="range" id="kpLockSlider" min="15" max="55" step="0.5" value="35" oninput="updateKpLock()">
+            </div>
+            <div class="col" style="flex:0.5">
+                <div class="value-display" id="kpLockVal">35.0</div>
+            </div>
+        </div>
+        <p style="color: var(--text-dim); font-size: 0.8em; margin-top: 5px;">
+            💡 <b>Test:</b> Start robot at 45° angle to opponent. Time how fast it centers. If it overshoots past center and corrects back, Kp is too high.
+        </p>
+    </div>
+
+    <!-- STEP 3: KD TRACK -->
+    <div class="panel" id="step3">
+        <h3>Step 3: Tracking Damping (PID_KD_TRACK)</h3>
+        <p style="color: var(--text-dim);">Derivative gain that smooths tracking after lock-on. Higher = less oscillation but slower correction. The "Soft Turn" personality.</p>
+        <div class="row">
+            <div class="col" style="flex:2">
+                <input type="range" id="kdTrackSlider" min="5" max="30" step="0.5" value="15" oninput="updateKdTrack()">
+            </div>
+            <div class="col" style="flex:0.5">
+                <div class="value-display" id="kdTrackVal">15.0</div>
+            </div>
+        </div>
+        <p style="color: var(--text-dim); font-size: 0.8em; margin-top: 5px;">
+            💡 <b>Test:</b> During sustained tracking (2+ seconds), robot should follow without jerky corrections. Increase Kd if it oscillates, decrease if it feels "lazy."
+        </p>
+    </div>
+
+    <!-- STEP 4: DISTANCE ZONES -->
+    <div class="panel" id="step4">
+        <h3>Step 4: Distance-Gated Attack Zones</h3>
+        <p style="color: var(--text-dim);">Define when the robot switches from cautious approach to full attack.</p>
+        
+        <div class="row">
+            <div class="col">
+                <label>Red Zone Max (mm) — Full Attack</label>
+                <input type="number" id="zoneRed" value="100" min="30" max="200" onchange="updateZones()">
+            </div>
+            <div class="col">
+                <label>Red Zone Speed %</label>
+                <input type="number" id="zoneRedSpeed" value="100" min="70" max="100" onchange="updateZones()">
+            </div>
+        </div>
+        <div class="row" style="margin-top:10px">
+            <div class="col">
+                <label>Yellow Zone Max (mm) — Approach</label>
+                <input type="number" id="zoneYellow" value="300" min="150" max="400" onchange="updateZones()">
+            </div>
+            <div class="col">
+                <label>Yellow Zone Speed %</label>
+                <input type="number" id="zoneYellowSpeed" value="70" min="40" max="90" onchange="updateZones()">
+            </div>
+        </div>
+        <div class="row" style="margin-top:10px">
+            <div class="col">
+                <label>Green Zone Max (mm) — Cautious</label>
+                <input type="number" id="zoneGreen" value="500" min="300" max="600" onchange="updateZones()">
+            </div>
+            <div class="col">
+                <label>Green Zone Speed %</label>
+                <input type="number" id="zoneGreenSpeed" value="40" min="20" max="60" onchange="updateZones()">
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- EXPERT MODE -->
+<div id="tab-expert" class="tab-content">
+    <div class="panel">
+        <h2>Expert Mode — All Parameters</h2>
+        <p style="color: var(--text-dim);">Direct access to all tunable PID parameters. For experienced users who know what each value does.</p>
+    </div>
+    <div class="panel">
+        <div class="row">
+            <div class="col"><label>PID_KP_LOCK</label><input type="number" id="expKpLock" value="35.0" step="0.5"><p style="font-size:0.75em;color:var(--text-dim)">Aggressive lock-on P gain</p></div>
+            <div class="col"><label>PID_KD_LOCK</label><input type="number" id="expKdLock" value="8.0" step="0.5"><p style="font-size:0.75em;color:var(--text-dim)">Lock-on D gain</p></div>
+            <div class="col"><label>LOCK_DURATION_MS</label><input type="number" id="expLockDur" value="200"><p style="font-size:0.75em;color:var(--text-dim)">Lock phase duration</p></div>
+        </div>
+        <div class="row" style="margin-top:10px">
+            <div class="col"><label>PID_KP_TRACK</label><input type="number" id="expKpTrack" value="28.5" step="0.5"><p style="font-size:0.75em;color:var(--text-dim)">Smooth tracking P gain</p></div>
+            <div class="col"><label>PID_KD_TRACK</label><input type="number" id="expKdTrack" value="15.0" step="0.5"><p style="font-size:0.75em;color:var(--text-dim)">Tracking D gain</p></div>
+            <div class="col"><label>FADE_DURATION_MS</label><input type="number" id="expFadeDur" value="50"><p style="font-size:0.75em;color:var(--text-dim)">Transition time</p></div>
+        </div>
+        <div class="row" style="margin-top:10px">
+            <div class="col"><label>BASE_SPEED_ATTACK</label><input type="number" id="expBaseSpeed" value="80"><p style="font-size:0.75em;color:var(--text-dim)">Attack base speed %</p></div>
+            <div class="col"><label>BASE_SPEED_FLANK</label><input type="number" id="expFlankSpeed" value="60"><p style="font-size:0.75em;color:var(--text-dim)">Flank speed %</p></div>
+            <div class="col"><label>SEARCH_SPEED_DEFAULT</label><input type="number" id="expSearchSpeed" value="60"><p style="font-size:0.75em;color:var(--text-dim)">Search speed %</p></div>
+        </div>
+    </div>
+</div>
+
+<!-- STRATEGY EDITOR -->
+<div id="tab-strategy" class="tab-content">
+    <div class="panel">
+        <h2>Strategy Editor</h2>
+        <p style="color: var(--text-dim);">Visually edit opening tactics. Drag to reorder steps, adjust speeds with sliders.</p>
+        <p style="color: var(--yellow); font-size: 0.85em; margin-top: 10px;">
+            ⚠️ Full GUI coming in v2.0 — for now, edit strategy_template.json directly and use the Export button below to generate strategies.h.
+        </p>
+        <div class="code-block" id="strategyPreview">
+// Select a strategy index (0-7) to preview
+        </div>
+        <div style="margin-top:10px">
+            <label>Strategy Index</label>
+            <input type="number" id="stratIndex" min="0" max="7" value="0" onchange="previewStrategy()">
+        </div>
+    </div>
+</div>
+
+<!-- EXPORT SECTION -->
+<div class="panel export-section">
+    <h2>📋 Export Config</h2>
+    <p style="color: var(--text-dim); margin-bottom: 15px;">
+        Copy the generated code below and paste into <code>Config.h</code> to replace the PID section.
+    </p>
+    <button class="btn-primary" onclick="generateExport()" style="margin-right:10px;">🔄 Generate Config.h Snippet</button>
+    <button class="btn-green" onclick="copyToClipboard()">📋 Copy to Clipboard</button>
+
+    <div class="code-block" id="exportBlock" style="margin-top: 15px;">
+// Click "Generate Config.h Snippet" to see the output
+    </div>
+</div>
+
+<!-- RECOMMENDED RANGES -->
+<div class="panel">
+    <h2>📊 Reference: Proven PID Values</h2>
+    <table style="width:100%; border-collapse:collapse; font-size:0.9em;">
+        <thead>
+            <tr style="color:var(--green);">
+                <th style="text-align:left;padding:8px;border-bottom:1px solid var(--border)">Source</th>
+                <th style="text-align:center;padding:8px;border-bottom:1px solid var(--border)">Kp</th>
+                <th style="text-align:center;padding:8px;border-bottom:1px solid var(--border)">Kd</th>
+                <th style="text-align:center;padding:8px;border-bottom:1px solid var(--border)">Base Speed</th>
+                <th style="text-align:left;padding:8px;border-bottom:1px solid var(--border)">Character</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td style="padding:8px;border-bottom:1px solid var(--border)">Black Magic v2 "Soft Turn"</td>
+                <td style="text-align:center;padding:8px;border-bottom:1px solid var(--border)">28.5</td>
+                <td style="text-align:center;padding:8px;border-bottom:1px solid var(--border)">15.0</td>
+                <td style="text-align:center;padding:8px;border-bottom:1px solid var(--border)">80</td>
+                <td style="padding:8px;border-bottom:1px solid var(--border);color:var(--blue)">Smooth, minimal oscillation</td>
+            </tr>
+            <tr>
+                <td style="padding:8px;border-bottom:1px solid var(--border)">Black Magic v3 "Sharp Turn"</td>
+                <td style="text-align:center;padding:8px;border-bottom:1px solid var(--border)">35.0</td>
+                <td style="text-align:center;padding:8px;border-bottom:1px solid var(--border)">10.0</td>
+                <td style="text-align:center;padding:8px;border-bottom:1px solid var(--border)">80</td>
+                <td style="padding:8px;border-bottom:1px solid var(--border);color:var(--accent)">Aggressive, fast lock-on</td>
+            </tr>
+            <tr>
+                <td style="padding:8px;">TAXI Default (Hybrid)</td>
+                <td style="text-align:center;padding:8px;">35→28.5</td>
+                <td style="text-align:center;padding:8px;">8→15</td>
+                <td style="text-align:center;padding:8px;">80</td>
+                <td style="padding:8px;color:var(--green)">Best of both — gain scheduling</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<script>
+// Current tuning values
+let currentValues = {
+    baseSpeed: 80,
+    kpLock: 35.0,
+    kdLock: 8.0,
+    kpTrack: 28.5,
+    kdTrack: 15.0,
+    lockDuration: 200,
+    fadeDuration: 50,
+    flankSpeed: 60,
+    searchSpeed: 60,
+    zoneRed: 100, zoneRedSpeed: 100,
+    zoneYellow: 300, zoneYellowSpeed: 70,
+    zoneGreen: 500, zoneGreenSpeed: 40
+};
+
+function switchTab(tab) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.querySelector(`.tab:nth-child(${tab === 'guided' ? 1 : tab === 'expert' ? 2 : 3})`).classList.add('active');
+    document.getElementById(`tab-${tab}`).classList.add('active');
+}
+
+function updateBaseSpeed() {
+    currentValues.baseSpeed = parseInt(document.getElementById('baseSpeedSlider').value);
+    document.getElementById('baseSpeedVal').textContent = currentValues.baseSpeed;
+}
+
+function updateKpLock() {
+    currentValues.kpLock = parseFloat(document.getElementById('kpLockSlider').value);
+    document.getElementById('kpLockVal').textContent = currentValues.kpLock.toFixed(1);
+}
+
+function updateKdTrack() {
+    currentValues.kdTrack = parseFloat(document.getElementById('kdTrackSlider').value);
+    document.getElementById('kdTrackVal').textContent = currentValues.kdTrack.toFixed(1);
+}
+
+function updateZones() {
+    currentValues.zoneRed = parseInt(document.getElementById('zoneRed').value);
+    currentValues.zoneRedSpeed = parseInt(document.getElementById('zoneRedSpeed').value);
+    currentValues.zoneYellow = parseInt(document.getElementById('zoneYellow').value);
+    currentValues.zoneYellowSpeed = parseInt(document.getElementById('zoneYellowSpeed').value);
+    currentValues.zoneGreen = parseInt(document.getElementById('zoneGreen').value);
+    currentValues.zoneGreenSpeed = parseInt(document.getElementById('zoneGreenSpeed').value);
+}
+
+function generateExport() {
+    const out = `// ============================================================================
+// Generated by TAXI PID Tuning Tool — ${new Date().toISOString().split('T')[0]}
+// Paste this section into Config.h to replace the PID constants.
+// ============================================================================
+
+// --- Lock-on phase (aggressive centering) ---
+#define PID_KP_LOCK             ${currentValues.kpLock.toFixed(1)}f
+#define PID_KD_LOCK             ${currentValues.kdLock.toFixed(1)}f
+#define PID_LOCK_DURATION_MS    ${currentValues.lockDuration}
+
+// --- Tracking phase (smooth follow) ---
+#define PID_KP_TRACK            ${currentValues.kpTrack.toFixed(1)}f
+#define PID_KD_TRACK            ${currentValues.kdTrack.toFixed(1)}f
+#define PID_FADE_DURATION_MS    ${currentValues.fadeDuration}
+
+// --- Motor speed limits ---
+#define PID_BASE_SPEED_ATTACK   ${currentValues.baseSpeed}
+#define PID_BASE_SPEED_FLANK    ${currentValues.flankSpeed}
+
+// --- Distance attack zones ---
+#define ZONE_RED_MAX            ${currentValues.zoneRed}
+#define ZONE_YELLOW_MAX         ${currentValues.zoneYellow}
+#define ZONE_GREEN_MAX          ${currentValues.zoneGreen}
+#define ZONE_SPEED_RED          ${currentValues.zoneRedSpeed}
+#define ZONE_SPEED_YELLOW       ${currentValues.zoneYellowSpeed}
+#define ZONE_SPEED_GREEN        ${currentValues.zoneGreenSpeed}
+
+// --- Search speed ---
+#define SEARCH_SPEED_DEFAULT    ${currentValues.searchSpeed}`;
+
+    document.getElementById('exportBlock').textContent = out;
+}
+
+function copyToClipboard() {
+    const text = document.getElementById('exportBlock').textContent;
+    navigator.clipboard.writeText(text).then(() => {
+        alert('Copied to clipboard! Paste into Config.h.');
+    });
+}
+
+function previewStrategy() {
+    const idx = parseInt(document.getElementById('stratIndex').value);
+    const strategies = [
+        "Rush Forward: 1 step — Full forward 100% for 1000ms",
+        "Right Rush: 3 steps — Pivot right 105ms → counter 40ms → forward 1000ms",
+        "Left Rush: 3 steps — Pivot left 105ms → counter 40ms → forward 1000ms",
+        "Zigzag R→L: 8 steps — Sweep pattern covering center from right to left",
+        "Zigzag L→R: 8 steps — Sweep pattern covering center from left to right",
+        "180° Spin Rush: 3 steps — 180° pivot right → counter → forward",
+        "Delayed Rush: 2 steps — Wait 200ms → force 1000ms",
+        "Sweep Right: 4 steps — Wide arc right 500ms → forward 300ms → arc left → forward"
+    ];
+    document.getElementById('strategyPreview').textContent = 
+        `// Strategy ${idx}: ${strategies[idx]}\n// Edit strategy_template.json to customize.`;
+}
+
+// Initialize
+updateBaseSpeed();
+updateKpLock();
+updateKdTrack();
+generateExport();
+</script>
+
+</body>
+</html>

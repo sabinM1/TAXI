@@ -1,0 +1,50 @@
+Led indicator de direcție
+
+Structura jos placa de aluminiu 1mm
+
+Aer comprimat pe ir sheet
+
+Hardened steel blade
+
+Prindere motoare mai buna
+
+Senzori pe laterale in fata, nu în mijloc
+
+Strategii în care virează după start
+
+Mod mai ușor de a pune lama CORECT - deci să fie pusă în fața astfel încât să fie mereu în aceeași poziție, nu neapărat cât mai în față (dar neapărat să fie mai jos decât deobicei, să zgârie podeaua), să fie exact în aceeași, poate lipită de perete din spate, iar ajustarea să fie de un șurub ceva, mai în spatele lamei, practic să ridice tot robotul mai în sus sau mai în jos, șurubul se va freca de podea
+
+Strategie în care se mișcă doar atunci când vede robot adversar
+
+Mai balansată greutatea, nu atât de mult pe spate, cat mai mult in fata jos
+
+Pilă pentru lamă
+
+Canistră de aer comprimat mică pentru senzori etc
+
+Mai multe tactici, cu viteze variabile etc
+
+Senzori tof de la sobotz
+
+MAI MULȚI senzori de detecție pe robot
+
+Lasă o gaură extra la pcb pentru strain relief la cabluri
+
+Mai mulți senzori de linie, iar la cei de pe colț să se ducă cu o curbă în loc de linie dreaptă în spate, ca să nu iasă din arenă
+
+Structură cod mai simplă
+
+PC tough filament
+
+Vezi PID pe codul de la JSumo, cum e implementat
+
+State machine mai bun, non-blocking chestii
+
+INTERFAȚĂ WEB PENTRU PROGRAMAT STRATEGII, ca roadrunner la ftc
+
+Senzor și în spatele robotului, dacă vede adversar se învârte repede
+
+Suprafața de jos a robotului full placă de aluminiu, gauri pentru senzori, roti; un șurub sau ceva ca un dom rotund ce să se poată ridica și coborî astfel încât să ridice sau să coboare lama și lama doar să se pună o dată cu un perete în spate așa încât să fie dreaptă și să nu fie ridicată mai în stânga sau dreapta
+
+Async I/O fetching
+
