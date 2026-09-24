@@ -1,420 +1,322 @@
-/**
- * StateMachine.h — Combat State Machine
- * 
- * Implements the state machine described in docs/SYSTEM_ARCHITECTURE.md:
- *   IDLE → TACTIC → SEARCH ↔ ATTACK
- *                      ↕        ↓
- *                    FLANK    EVADE (overrides all)
- * 
- * Priority chain (highest to lowest):
- *   1. EVADE  — line sensor triggered (safety override)
- *   2. ATTACK — front opponent detected (PD tracking)
- *   3. FLANK  — side opponent only (arc toward)
- *   4. SEARCH — no opponent (sweep-search)
- * 
- * WHY THIS DESIGN (from Phase 3 decisions):
- *   - Q5: Multiple strategies via DIP switches (some reactive, some active search)
- *   - Q6: Curved re-entry paths for edge evasion
- *   - Q12: 3 front + 2 side M60F (no rear sensor)
+/*
+ * StateMachine.h — combat flow.
+ *
+ * States:  IDLE -> TACTIC -> SEARCH <-> ATTACK/FLANK, with EVADE override
+ *          from any combat state, and STOP when the Start/Stop module drops.
+ *
+ * Start module (A0, INPUT_PULLUP): HIGH = fight, LOW = armed/stopped
+ * (NanoLabs module, active-high per official docs; the Full_Robot_Test
+ * sketch guessed the opposite polarity — it was wrong).
+ *
+ * Priority each loop: stop signal > evade > track (attack/flank) > search.
  */
-
 #ifndef STATEMACHINE_H
 #define STATEMACHINE_H
 
 #include <Arduino.h>
 #include "Config.h"
+#include "Motor.h"
 #include "Sensors.h"
-#include "Motors.h"
-#include "PIDController.h"
-#include "Tactics.h"
+#include "Strategies.h"
 
-// ============================================================================
-// STATE ENUM
-// ============================================================================
+enum RobotState : uint8_t { ST_IDLE, ST_TACTIC, ST_SEARCH, ST_ATTACK, ST_FLANK, ST_EVADE, ST_STOP };
+static RobotState state = ST_IDLE;
 
-enum RobotState : uint8_t {
-    STATE_IDLE = 0,     // Waiting for start signal
-    STATE_TACTIC,       // Executing opening tactic
-    STATE_SEARCH,       // Searching for opponent
-    STATE_ATTACK,       // PD-controlled attack
-    STATE_FLANK,        // Side opponent tracking
-    STATE_EVADE,        // Edge escape (overrides everything)
-    STATE_STOP          // Emergency stop / match end
-};
+// Start/stop debounce state. IMPORTANT: must start LOW (armed) — HIGH would
+// fake an instant start before the debounce ever reads the real pin.
+static bool    startRaw = LOW, startStable = LOW;
+static uint32_t startChangeMs = 0;
 
-// ============================================================================
-// STATE MACHINE GLOBALS
-// ============================================================================
+// Search bookkeeping
+static uint32_t searchModeStart = 0;
+static int8_t   searchDir = 1;          // +1 turn right, -1 turn left
+static uint32_t lastSeenMs = 0;
 
-static RobotState currentState = STATE_IDLE;
-static RobotState previousState = STATE_IDLE;
-static uint32_t stateEntryTime = 0;       // When current state was entered
-static uint32_t searchStartTime = 0;      // When SEARCH began (for timeout)
-static uint32_t lastOpponentSeen = 0;     // Last time any opponent was detected
-static int8_t lastKnownDirection = 0;     // -1=left, 0=forward, 1=right
-static uint8_t evadeTriggerSensor = 0;    // Which QRE triggered EVADE
-static uint32_t evadeStartTime = 0;       // When EVADE began
-static uint8_t evadePhase = 0;            // 0=reverse, 1=curve/pivot
+// Evade bookkeeping
+static uint32_t evadeStart = 0;
+static int8_t   evadeFrom = 0;
 
-// ============================================================================
-// STATE TRANSITIONS
-// ============================================================================
+static bool isStarted() { return startStable == HIGH; }
+
+#if DEBUG_VERBOSE
+static const char* stateName(RobotState s) {
+  switch (s) {
+    case ST_IDLE:   return "IDLE";
+    case ST_TACTIC: return "TACTIC";
+    case ST_SEARCH: return "SEARCH";
+    case ST_ATTACK: return "ATTACK";
+    case ST_FLANK:  return "FLANK";
+    case ST_EVADE:  return "EVADE";
+    case ST_STOP:   return "STOP";
+    default:        return "?";
+  }
+}
+// All state assignments go through here so every transition is logged.
+static void gotoState(RobotState s) {
+  if (s == state) return;
+  Serial.print(F("[SM] ")); Serial.print(stateName(state));
+  Serial.print(F(" -> "));   Serial.print(stateName(s));
+  Serial.print(F("  t=")); Serial.print(millis());
+  Serial.print(F("ms"));
+  if (s == ST_EVADE) { Serial.print(F("  edgeFrom=")); Serial.print(evadeFrom); }
+  Serial.println();
+  state = s;
+}
+#else
+static void gotoState(RobotState s) { state = s; }
+#endif
 
 /**
- * Transition to a new state. Records entry time, resets phase counters.
+ * Debounce the Start/Stop module. HIGH = fight, LOW = armed/stopped.
+ * Call every loop() BEFORE anything that uses isStarted().
  */
-void stateTransition(RobotState newState) {
-    if (newState == currentState) return;
-    
-    previousState = currentState;
-    currentState = newState;
-    stateEntryTime = millis();
-    evadePhase = 0;
-    
-    #if SERIAL_DEBUG
-    const char* stateNames[] = {"IDLE","TACTIC","SEARCH","ATTACK","FLANK","EVADE","STOP"};
-    Serial.print(F("[State] "));
-    Serial.print(stateNames[previousState]);
-    Serial.print(F(" → "));
-    Serial.println(stateNames[currentState]);
-    #endif
+static void startModuleUpdate() {
+  bool raw = digitalRead(PIN_START);
+  if (raw != startRaw) { startRaw = raw; startChangeMs = millis(); }
+  if (raw != startStable && (millis() - startChangeMs) >= START_SIGNAL_DEBOUNCE_MS)
+    startStable = raw;
 }
 
-// ============================================================================
-// STATE HANDLERS
-// ============================================================================
+// ------------------------- state helpers ------------------------------------
 
 /**
- * IDLE state: Wait for START-STOP module to trigger.
- * 
- * Hardware check:
- *   - START-STOP on A0 (per user Q7 requirement)
- *   - Reads HIGH when competition start signal detected
- *   - Debounced for START_SIGNAL_DEBOUNCE_MS
+ * Steer the robot while hunting. Three patterns:
+ *   SPIN  — rotate in place (fastest sensor sweep, never leaves the ring)
+ *   ARC   — wide arcs, covers ground while scanning
+ *   SWEEP — alternating shallow arcs (figure-8-ish), most area covered
+ * After SEARCH_PATTERN_TIMEOUT_MS without seeing anything, the pattern
+ * mirrors (searchDir flips) so we never spiral forever in one direction.
+ * Scaled by the trimpot master.
  */
-void stateIdle() {
-    static uint32_t signalStable = 0;
-    static bool lastSignal = false;
-    
-    bool signal = digitalRead(START_STOP_PIN);
-    
-    if (signal && !lastSignal) {
-        signalStable = millis();
-    }
-    
-    if (signal && (millis() - signalStable) > START_SIGNAL_DEBOUNCE_MS) {
-        // Start signal confirmed — enter TACTIC
-        stateTransition(STATE_TACTIC);
-    }
-    
-    lastSignal = signal;
-    
-    // Show sensor health on LED ring while waiting
-    // (handled by LEDRing update — called from main loop)
-}
+static void searchUpdate(SearchStyle style) {
+  uint8_t scale = trimpotScale();
+  int sp = (SEARCH_SPEED_PCT * scale) / 100;
+  if (millis() - searchModeStart > SEARCH_PATTERN_TIMEOUT_MS) {
+    searchModeStart = millis();
+    searchDir = -searchDir;
+  }
 
-/**
- * TACTIC state: Execute DIP-switch-selected opening pattern.
- * 
- * Calls the tactic handler from Tactics.h which runs the programmed sequence.
- * When tactic completes (returns true), transition to SEARCH.
- * 
- * Tactic implementation is in Tactics.h — separated for the HTML strategy GUI
- * to eventually generate this file.
- */
-void stateTactic() {
-    bool tacticDone = tacticExecute();
-    
-    if (tacticDone) {
-        searchStartTime = millis();
-        stateTransition(STATE_SEARCH);
-    }
-    
-    // Still allow edge detection during tactic
-    if (qreAnyEdge() >= 0) {
-        evadeTriggerSensor = qreAnyEdge();
-        stateTransition(STATE_EVADE);
-    }
+  switch (style) {
+    case SEARCH_SPIN:   // in-place rotation, fastest sensor sweep
+      motorsSet(searchDir > 0 ? sp : -sp,
+                searchDir > 0 ? -sp : sp);
+      break;
+    case SEARCH_ARC:    // wide arcs, covers ground while moving
+      motorsSet(searchDir > 0 ? sp : sp / 2,
+                searchDir > 0 ? sp / 2 : sp);
+      break;
+    case SEARCH_SWEEP:  // figure-8-ish: alternate arcs every cycle
+    default:
+      motorsSet(searchDir > 0 ? sp : sp / 3,
+                searchDir > 0 ? sp / 3 : sp);
+      break;
+  }
 }
 
 /**
- * SEARCH state: Sweep-search for opponent.
- * 
- * Uses distance-adaptive arc width:
- *   - If opponent was recently seen (<800ms ago): tight arcs toward last direction
- *   - If opponent was seen longer ago: wider arcs
- *   - If never seen: spin-search (rotate in place)
- * 
- * Distance-gated (Q5 Option B strategy): robot actively moves and searches.
- * For Option A strategies (purely reactive), SEARCH would spin in place.
- * Strategy selection determines search behavior.
+ * Base push speed for the attack: full power at ATTACK_CLOSE_DIST_MM,
+ * tapering linearly to ATTACK_SPEED_FAR_PCT at ATTACK_FAR_DIST_MM.
+ * Falls back to the far speed when the closest reading is invalid.
+ * Finally scaled by the trimpot master.
  */
-void stateSearch() {
-    // Check if opponent appeared during search
-    uint8_t oppType = pidOpponentType();
-    if (oppType == 1) {
-        stateTransition(STATE_ATTACK);
-        return;
-    }
-    if (oppType == 2) {
-        stateTransition(STATE_FLANK);
-        return;
-    }
-    
-    // Determine search speed from trimpot
-    uint8_t searchSpeed = map(xmotion.Trimpot(), 0, 1023, 30, 100);
-    searchSpeed = constrain(searchSpeed, 30, 100);
-    
-    uint32_t now = millis();
-    uint32_t searchElapsed = now - searchStartTime;
-    uint32_t sinceLastSeen = now - lastOpponentSeen;
-    
-    // If we've been searching too long, escalate to spin-search
-    if (searchElapsed > SEARCH_TIMEOUT_MS) {
-        // Rotate in place — full sweep
-        motorsPivotRight(searchSpeed);
-        return;
-    }
-    
-    // Use last known direction memory
-    if (sinceLastSeen < LAST_KNOWN_TIMEOUT_MS) {
-        // Recent contact — arc toward last known direction
-        if (lastKnownDirection < 0) {
-            // Was going left — arc left
-            motorsArc(searchSpeed * 0.5, searchSpeed);
-        } else if (lastKnownDirection > 0) {
-            // Was going right — arc right
-            motorsArc(searchSpeed, searchSpeed * 0.5);
-        } else {
-            // Was going forward — continue forward
-            motorsForward(searchSpeed);
-        }
-    } else {
-        // No recent contact — wide sweep pattern
-        // Alternate direction every SEARCH_ARC_DURATION_MS
-        uint32_t phase = (searchElapsed / SEARCH_ARC_DURATION_MS) % 4;
-        switch (phase) {
-            case 0: motorsArc(searchSpeed, searchSpeed * SEARCH_ARC_RATIO); break;  // Arc right
-            case 1: motorsForward(searchSpeed); break;                              // Forward
-            case 2: motorsArc(searchSpeed * SEARCH_ARC_RATIO, searchSpeed); break;  // Arc left
-            case 3: motorsForward(searchSpeed); break;                              // Forward
-        }
-    }
+static int attackBaseSpeed(uint16_t mm, bool ok) {
+  int base;
+  if (!ok || mm >= ATTACK_FAR_DIST_MM)  base = ATTACK_SPEED_FAR_PCT;
+  else if (mm <= ATTACK_CLOSE_DIST_MM)  base = ATTACK_SPEED_CLOSE_PCT;
+  else base = (int)map((long)mm, ATTACK_CLOSE_DIST_MM, ATTACK_FAR_DIST_MM,
+                       ATTACK_SPEED_CLOSE_PCT, ATTACK_SPEED_FAR_PCT);
+  return (base * trimpotScale()) / 100;
 }
 
 /**
- * ATTACK state: PD-controlled opponent tracking.
- * 
- * Calls pidUpdate() which handles:
- *   - Weighted error calculation
- *   - Anti-flag protection
- *   - Hybrid gain scheduling
- *   - Distance-gated attack zones
- *   - Motor output
- * 
- * Records last known direction for SEARCH memory.
+ * Chase + push: base speed from distance, plus proportional steering.
+ * Bearing > 0 (opponent right) slows the right motor, and vice-versa.
+ * Stamps lastSeenMs so the caller's lost-target timeout stays armed.
  */
-void stateAttack() {
-    bool tracking = pidUpdate();
-    
-    if (!tracking) {
-        // Lost opponent — check if we should keep attacking or search
-        if (millis() - lastOpponentSeen > 500) {
-            // Lost for >500ms → back to SEARCH
-            pidReset();
-            stateTransition(STATE_SEARCH);
-            return;
-        }
-        // Briefly lost — hold last known behavior for a moment
-        return;
-    }
-    
-    // Update last known direction
-    if (pidState.error < -1.0f) {
-        lastKnownDirection = -1;  // Turning left
-    } else if (pidState.error > 1.0f) {
-        lastKnownDirection = 1;   // Turning right
-    } else {
-        lastKnownDirection = 0;   // Centered
-    }
-    
-    lastOpponentSeen = millis();
+static void attackUpdate() {
+  int8_t bearing = sensorsOpponent();
+  bool ok; uint16_t mm = sensorsClosestMm(&ok);
+  lastSeenMs = millis();
+
+  int base = attackBaseSpeed(mm, ok);
+
+  // Proportional steer: bearing >0 = opponent right -> slow right motor.
+  int corr = (int)((int32_t)bearing * base * ATTACK_STEER_GAIN_PCT / 10000);
+  motorsSet(constrain(base + corr, -100, 100),
+            constrain(base - corr, -100, 100));
 }
 
 /**
- * FLANK state: Side opponent detected, arc toward them.
- * 
- * Uses side M60F sensors (indices 3=Left, 4=Right) to determine arc direction.
- * Front sensors are checked as well — if front opponent appears, upgrade to ATTACK.
+ * Opponent registered off-center: pivot toward the bearing until it is
+ * re-centered (±15), then shove forward. 127 means lost — do nothing and
+ * let the caller's timeout drop us back to SEARCH.
  */
-void stateFlank() {
-    // Check if front opponent appeared (upgrade to ATTACK)
-    uint8_t oppType = pidOpponentType();
-    if (oppType == 1) {
-        stateTransition(STATE_ATTACK);
-        return;
-    }
-    if (oppType == 0) {
-        // Lost opponent entirely
-        lastOpponentSeen = millis() - 600;  // Will trigger SEARCH transition
-        stateTransition(STATE_SEARCH);
-        return;
-    }
-    
-    // Still only side opponent — arc toward it
-    bool leftSeen = (m60fHealth[3] >= HEALTH_FAIL_THRESHOLD &&
-                     m60fDistances[3] != M60F_INVALID_DIST &&
-                     m60fDistances[3] <= ZONE_GREEN_MAX);
-    bool rightSeen = (m60fHealth[4] >= HEALTH_FAIL_THRESHOLD &&
-                      m60fDistances[4] != M60F_INVALID_DIST &&
-                      m60fDistances[4] <= ZONE_GREEN_MAX);
-    
-    if (leftSeen && !rightSeen) {
-        // Opponent on left — arc left
-        motorsArc(PID_BASE_SPEED_FLANK * 0.4, PID_BASE_SPEED_FLANK);
-        lastKnownDirection = -1;
-    } else if (rightSeen && !leftSeen) {
-        // Opponent on right — arc right
-        motorsArc(PID_BASE_SPEED_FLANK, PID_BASE_SPEED_FLANK * 0.4);
-        lastKnownDirection = 1;
-    } else {
-        // Both sides or ambiguous — forward
-        motorsForward(PID_BASE_SPEED_FLANK);
-    }
-    
-    lastOpponentSeen = millis();
+static void flankUpdate() {
+  // Opponent on a side sensor: turn toward it until it is in front.
+  int8_t bearing = sensorsOpponent();
+  if (bearing == 127) return;
+  lastSeenMs = millis();
+
+  if (bearing >= -15 && bearing <= 15) {
+    motorsSet(FLANK_TURN_SPEED_PCT, FLANK_TURN_SPEED_PCT);   // lined up: push
+  } else if (bearing > 0) {
+    motorsSet(FLANK_TURN_SPEED_PCT, -FLANK_TURN_SPEED_PCT / 2);
+  } else {
+    motorsSet(-FLANK_TURN_SPEED_PCT / 2, FLANK_TURN_SPEED_PCT);
+  }
+}
+
+/** Phase 1 of EVADE: the blind escape burst.
+ *  Rear edge -> drive FORWARD (reversing would push us further off).
+ *  Any front edge -> reverse hard.
+ */
+static void evadeEscapeBurst() {
+  if (evadeFrom == 1) {
+    // Rear edge: NEVER reverse further — drive forward with a gentle bias.
+    if (searchDir > 0) motorsSet(80, 55); else motorsSet(55, 80);
+  } else {
+    motorsSet(EVADE_REVERSE_SPEED_PCT, EVADE_REVERSE_SPEED_PCT);
+  }
+}
+
+/** Phase 2 of EVADE: once sensors confirm we left the edge, pivot away
+ *  from whichever side tripped so we re-enter facing the ring centre.
+ */
+static void evadeTurnAway() {
+  if (evadeFrom == 0)      motorsSet(70, -50);    // left edge  -> spin right
+  else if (evadeFrom == 2) motorsSet(-50, 70);    // right edge -> spin left
+  else motorsSet(searchDir > 0 ? 60 : -60,
+                 searchDir > 0 ? -60 : 60);       // rear -> pivot home side
 }
 
 /**
- * EVADE state: Edge escape with curved re-entry.
- * 
- * Implements the user's "curbă" (curve) preference from Q6.
- * Phase 0: Reverse briefly
- * Phase 1: Execute curved re-entry path
- * 
- * If opponent appears during evasion, can transition to ATTACK mid-curve.
- * If both front and rear sensors trigger, both-front response takes priority.
+ * EVADE program: EVADE_ESCAPE_MIN_MS blind burst, then up to
+ * EVADE_TOTAL_MAX_MS of edge-aware escape/pivot, then hand control to
+ * SEARCH. Entered exclusively via the edge override in stateMachineUpdate().
  */
-void stateEvade() {
-    uint32_t evElapsed = millis() - evadeStartTime;
-    
-    // Determine which sensors are triggering
-    int8_t trigger = -2;  // -2 = no trigger, -1 = both front, 0-3 = specific
-    
-    if (qreBothFrontEdge()) {
-        trigger = -1;  // Both front
-    } else if (qreIsEdge(0)) {
-        trigger = 0;   // Front-Left
-    } else if (qreIsEdge(1)) {
-        trigger = 1;   // Front-Right
-    } else if (qreIsEdge(2)) {
-        trigger = 2;   // Rear-Left
-    } else if (qreIsEdge(3)) {
-        trigger = 3;   // Rear-Right
-    }
-    
-    // If all sensors are clear, go back to SEARCH
-    if (trigger == -2 && evElapsed > EVADE_CURVE_DURATION_MS + EVADE_REVERSE_MS) {
-        stateTransition(STATE_SEARCH);
-        searchStartTime = millis();
-        return;
-    }
-    
-    // Phase 0: Reverse
-    if (evadePhase == 0 && evElapsed < EVADE_REVERSE_MS) {
-        motorsBackward(EVADE_REVERSE_SPEED);
-        return;
-    }
-    
-    // Transition to Phase 1
-    if (evadePhase == 0) {
-        evadePhase = 1;
-    }
-    
-    // Phase 1: Curved re-entry (or pivot for both-front)
-    if (evadePhase == 1 && evElapsed < EVADE_REVERSE_MS + EVADE_CURVE_DURATION_MS) {
-        if (trigger >= -1) {
-            motorsEvadeCurve(trigger);
-        } else {
-            // Lost trigger — default to forward
-            motorsForward(EVADE_REVERSE_SPEED);
-        }
-        return;
-    }
-    
-    // Phase 1 complete — check if opponent appeared during evasion
-    if (pidOpponentType() == 1) {
-        stateTransition(STATE_ATTACK);
-        return;
-    }
-    
-    // Otherwise go to SEARCH
-    stateTransition(STATE_SEARCH);
-    searchStartTime = millis();
+static void evadeUpdate() {
+  uint32_t t = millis() - evadeStart;
+
+  // Phase 1: minimum blind escape burst (ignores sensors — can still be
+  // rolling off the dohyo while the edge flickers on/off).
+  if (t < EVADE_ESCAPE_MIN_MS) { evadeEscapeBurst(); return; }
+
+  // Phase 2: if the edge persists keep escaping, else pivot back in-bounds.
+  if (t < EVADE_TOTAL_MAX_MS) {
+    if (sensorsAnyEdge()) evadeEscapeBurst();
+    else                  evadeTurnAway();
+    return;
+  }
+
+  motorsStop();
+  gotoState(ST_SEARCH);
+  searchModeStart = millis();
 }
 
-/**
- * STOP state: Motors off. Entered on critical failure or match timeout.
- * Requires power cycle to exit.
- */
-void stateStop() {
-    motorsStop();
-}
-
-// ============================================================================
-// MAIN STATE MACHINE UPDATE
-// ============================================================================
+// ------------------------- main entry ---------------------------------------
 
 /**
- * Run one iteration of the state machine.
- * Called every main loop iteration. Never blocks.
- * 
- * Priority: EVADE overrides everything (checked first).
- * Then delegates to the current state's handler.
+ * Combat brain. Call once per loop() AFTER sensorsUpdate(); drives motors
+ * and mutates `state`. Priority each call:
+ *   1. start module killed   -> STOP
+ *   2. line edge             -> EVADE (from any fighting state, incl. TACTIC)
+ *   3. state body
  */
 void stateMachineUpdate() {
-    // ---- Highest priority: Edge detection (overrides everything) ----
-    int8_t edgeSensor = qreAnyEdge();
-    if (edgeSensor >= 0 && currentState != STATE_EVADE && currentState != STATE_IDLE) {
-        evadeTriggerSensor = edgeSensor;
-        evadeStartTime = millis();
-        evadePhase = 0;
-        pidReset();  // Stop attack if we were attacking
-        stateTransition(STATE_EVADE);
+  startModuleUpdate();
+
+  // Global stop: module released while fighting
+  if (!isStarted() && state != ST_IDLE && state != ST_STOP) {
+    gotoState(ST_STOP); motorsStop();
+    return;
+  }
+
+  // EVADE override: any edge while fighting (including the opening tactic)
+  if (sensorsAnyEdge() && state != ST_EVADE &&
+      state != ST_IDLE && state != ST_STOP) {
+    evadeFrom = sensorsEdgeIndex();
+    evadeStart = millis();
+    gotoState(ST_EVADE);
+  }
+
+  // Degraded fallback: too many ToF dead -> stay in safe spin-search.
+  bool degraded = sensorsHealthyCount() < TOF_MIN_HEALTHY_SENSORS;
+
+  // ToF front-priority scan only while pushing a target.
+  sensorsSetAttackScan(state == ST_ATTACK || state == ST_FLANK);
+
+  switch (state) {
+    case ST_IDLE:
+      motorsStop();
+      if (isStarted()) { tacticReset(); gotoState(ST_TACTIC); }
+      break;
+
+    case ST_TACTIC:
+      if (tacticRun()) {
+        gotoState(ST_SEARCH);
+        searchModeStart = millis();
+      }
+      break;
+
+    case ST_SEARCH: {
+      if (degraded) { motorsSet(50, -50); break; }   // blind spin-search
+      int8_t bearing = sensorsOpponent();
+      if (bearing != 127) {
+        lastSeenMs = millis();
+        gotoState((bearing >= -15 && bearing <= 15) ? ST_ATTACK : ST_FLANK);
+        break;
+      }
+      searchUpdate(STRATEGIES[strategyIndex].search);
+      break;
     }
-    
-    // ---- Failsafe: Check degradation level ----
-    uint8_t healthyM60F = m60fHealthyCount();
-    if (healthyM60F <= 2 && currentState != STATE_IDLE && currentState != STATE_STOP) {
-        // Degraded-2: too many sensor failures → safe search only
-        if (currentState == STATE_ATTACK || currentState == STATE_FLANK) {
-            stateTransition(STATE_SEARCH);
+
+    case ST_ATTACK: {
+      int8_t bearing = degraded ? 127 : sensorsOpponent();
+      if (bearing == 127) {
+        if (millis() - lastSeenMs > ATTACK_TARGET_LOST_MS) {
+          gotoState(ST_SEARCH); searchModeStart = millis();
+        } else {
+          int push = degraded ? 40
+                              : attackBaseSpeed(0xFFFF, false);
+          motorsSet(push, push);   // push on blind momentum
         }
+      } else if (bearing < -15 || bearing > 15) {
+        gotoState(ST_FLANK);        // opponent slid off center
+      } else {
+        attackUpdate();
+      }
+      break;
     }
-    
-    // ---- Delegate to current state ----
-    switch (currentState) {
-        case STATE_IDLE:   stateIdle();   break;
-        case STATE_TACTIC: stateTactic(); break;
-        case STATE_SEARCH: stateSearch(); break;
-        case STATE_ATTACK: stateAttack(); break;
-        case STATE_FLANK:  stateFlank();  break;
-        case STATE_EVADE:  stateEvade();  break;
-        case STATE_STOP:   stateStop();   break;
+
+    case ST_FLANK: {
+      if (degraded) { gotoState(ST_SEARCH); searchModeStart = millis(); break; }
+      int8_t bearing = sensorsOpponent();
+      if (bearing == 127) {
+        if (millis() - lastSeenMs > ATTACK_TARGET_LOST_MS) {
+          gotoState(ST_SEARCH); searchModeStart = millis();
+        } else {
+          motorsStop();
+        }
+      } else if (bearing >= -15 && bearing <= 15) {
+        gotoState(ST_ATTACK);
+      } else {
+        flankUpdate();
+      }
+      break;
     }
+
+    case ST_EVADE:
+      evadeUpdate();
+      break;
+
+    case ST_STOP:
+    default:
+      motorsStop();
+      break;
+  }
 }
 
-/**
- * Initialize the state machine.
- * Called once from setup() after sensor init.
- */
-void stateMachineInit() {
-    currentState = STATE_IDLE;
-    stateEntryTime = millis();
-    
-    #if SERIAL_DEBUG
-    Serial.println(F("[StateMachine] Initialized — waiting for start signal"));
-    #endif
-}
+/** Current state for the ring/status display. */
+uint8_t stateMachineState() { return (uint8_t)state; }
 
 #endif // STATEMACHINE_H

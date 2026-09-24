@@ -1,229 +1,171 @@
-/**
- * ============================================================================
- * TAXI — Mini Sumo Robot Firmware
- * Platform: JSUMO XMotion V3 (ATmega32U4, Arduino Leonardo)
- * Class: Mini Sumo — 500g, 10cm × 10cm, 77cm dohyo
- * ============================================================================
- * 
- * ARCHITECTURE: Non-blocking modular state machine
- *   - All sensor reads are async or sub-millisecond
- *   - No delay(), no pulseIn(), no blocking readBytesUntil()
- *   - Main loop runs at full speed (~1.5ms per iteration)
- * 
- * MODULES:
- *   Config.h        — All constants, pins, thresholds (tune here)
- *   Sensors.h       — M60F async UART + QRE1113 analog fast read
- *   Motors.h        — Motor control wrappers (non-blocking)
- *   PIDController.h — PD controller with hybrid gain scheduling
- *   StateMachine.h  — Combat state machine (IDLE→TACTIC→SEARCH↔ATTACK↔FLANK→EVADE)
- *   Tactics.h       — DIP-switch selectable opening strategies
- *   LEDRing.h       — WS2812 LED ring visual feedback
- *   IMU.h           — ICM20602 gyro/accel (experimental)
- * 
- * DECISIONS (from Phase 3 user answers):
- *   Q1: 3 front M60F (center + 25° left/right) + 2 side (90°) — Option A
- *   Q2: All M60F in Serial mode (distance mm) — Option A
- *   Q3: ICM20602 full integration with positioning — Option A
- *   Q4: 500g / 10cm×10cm standard mini sumo
- *   Q5: Multiple strategies via DIP (reactive + active search)
- *   Q6: Curved re-entry edge evasion
- *   Q7: START-STOP on A0
- *   Q8: PID gains hardcoded + companion tuning tool
- *   Q9: Missing parts included in BOM
- *   Q10: XT30 battery connector
- *   Q11: Standalone HTML GUI for strategy programming
- *   Q12: 3 front + 2 side, NO rear sensor
+/*
+ * TAXI_Firmware.ino — main program for the TAXI mini sumo.
+ *
+ * Hardware (verified, see Config.h):
+ *   5x M60F ToF on D4 (ids 1..5; 1,2,4,5 in cm — 3 in mm)
+ *   3x QRE1113 line sensors (A1 right, A4 rear, A5 left)
+ *   WS2812 7-LED ring on A2  /  Start-Stop module on A0 (HIGH = fight)
+ *   DIP strategy select on D5/D6/D7  /  dual motors (D3 D12 | D11 D13)
+ *
+ * Loop order matters: ToF serial reads always finish before FastLED.show()
+ * (the WS2812 bit-bang blocks interrupts and would garble the sensor bus).
+ *
+ * Libraries to install (Arduino Library Manager): FastLED, SingleWireSerial.
  */
 
-#include <xmotionV3.h>
 #include "Config.h"
+#include "RingInfoDisplay.h"
 #include "Sensors.h"
-#include "Motors.h"
-#include "PIDController.h"
+#include "Strategies.h"
 #include "StateMachine.h"
-#include "Tactics.h"
-#include "LEDRing.h"
-#include "IMU.h"
 
-// ============================================================================
-// SETUP
-// ============================================================================
+static const CRGB STATE_COLOR[] = {
+  CRGB::Green,    // IDLE    — waiting for start
+  CRGB::Purple,   // TACTIC  — opening move
+  CRGB::Blue,     // SEARCH
+  CRGB::Red,      // ATTACK
+  CRGB::Orange,   // FLANK
+  CRGB::White,    // EVADE
+  CRGB::Black     // STOP
+};
+
+// Render all 5 ToF sensors as a green->red distance gradient on the outer
+// ring (uses RingInfoDisplay.h helpers). Far (>= RING_DIST_GREEN_CM) = green,
+// very close = red; brightness also fades with distance (near = bright).
+// Invalid readings stay blank.
+static void renderToFGradient() {
+  for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++) {
+    if (!tofValid[i]) continue;
+    uint16_t cm = tofMm[i] / 10u;      // tofMm[] holds mm for every sensor
+    CRGB c = RingDistanceColor(cm);
+    ringLeds[RING_TOF_LED[i + 1]] = RingScaleColor(c, RingDistanceBrightness(cm));
+  }
+}
+
+static void ringStatusUpdate() {
+  static uint32_t blinkT = 0;
+  static bool blinkOn = false;
+
+  if (millis() - blinkT < 250) return;
+  blinkT = millis();
+  blinkOn = !blinkOn;
+  FastLED.clear();
+
+  switch ((RobotState)stateMachineState()) {
+    case ST_IDLE: {
+      // Pit view: 5-sensor ToF distance gradient (green far -> red close)
+      // + line-edge overlay (white = white border seen). Strategy number is
+      // echoed on Serial at boot, so the ring is free for a live sensor check.
+      renderToFGradient();
+      if (lineLeft)    ringLeds[3] = CRGB::White;   // left edge  (front-left)
+      if (lineRear)    ringLeds[1] = CRGB::White;   // rear edge  (back)
+      if (lineRight)   ringLeds[5] = CRGB::White;   // right edge (front-right)
+      if (blinkOn)     ringLeds[0] = CRGB::Green;   // heartbeat (center)
+      break;
+    }
+
+    case ST_SEARCH: {
+      // Live front-arc ToF view: LED3=id4 L, LED4=id3 C, LED5=id2 R.
+      if (tofValid[3]) ringLeds[3] = CRGB::Green;
+      if (tofValid[2]) ringLeds[4] = CRGB::Green;
+      if (tofValid[1]) ringLeds[5] = CRGB::Green;
+      bool ok; uint16_t mm = sensorsClosestMm(&ok);
+      if (ok && mm <= 250) ringLeds[0] = CRGB(255, 191, 0);   // amber
+      // Degraded sensor bus: blink center red.
+      if (sensorsHealthyCount() < TOF_MIN_HEALTHY_SENSORS && blinkOn)
+        ringLeds[0] = CRGB::Red;
+      break;
+    }
+
+    default:
+      RingFill(STATE_COLOR[stateMachineState()]);
+      break;
+  }
+  RingShow();
+}
+
+// ============================= DEBUG TELEMETRY =============================
+// Prints one snapshot every 200 ms when DEBUG_VERBOSE is on:
+//   state, DipCP strategy, start pin, opponent bearing + closest mm,
+//   all 5 ToF (mm, '-' = invalid), line raw + debounced flags, health count,
+//   trimpot scale, last motor command.
+#if DEBUG_VERBOSE
+static void debugDump() {
+  static uint32_t last = 0;
+  if (millis() - last < 200) return;
+  last = millis();
+
+  int l, r; motorsGetLast(&l, &r);
+  bool ok; uint16_t mm = sensorsClosestMm(&ok);
+
+  Serial.print(F("[DBG] t=")); Serial.print(millis());
+  Serial.print(F(" st="));  Serial.print(stateName((RobotState)stateMachineState()));
+  Serial.print(F(" dip="));  Serial.print(strategyIndex);
+  Serial.print(F(" start="));Serial.print(digitalRead(PIN_START));
+  Serial.print(F(" brg="));  Serial.print(sensorsOpponent());
+  Serial.print(F(" mm="));   if (ok) Serial.print(mm); else Serial.print('-');
+  Serial.print(F(" tof=["));
+  for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++) {
+    if (tofValid[i]) Serial.print(tofMm[i]); else Serial.print('-');
+    if (i < TOF_SENSOR_COUNT - 1) Serial.print(',');
+  }
+  Serial.print(F("] h="));    Serial.print(sensorsHealthyCount());
+  Serial.print(F(" line=[")); for (uint8_t i = 0; i < 3; i++) {
+    Serial.print(lineRaw[i]); if (i < 2) Serial.print(',');
+  }
+  Serial.print(F("] edge="));
+  Serial.print(lineLeft); Serial.print(lineRear); Serial.print(lineRight);
+  Serial.print(F(" tri=")); Serial.print(trimpotScale());
+  Serial.print(F(" mot=")); Serial.print(l); Serial.print('/'); Serial.println(r);
+}
+#endif
 
 void setup() {
-    // ---- Serial debug output ----
-    #if SERIAL_DEBUG
-    Serial.begin(SERIAL_BAUD);
-    delay(500);  // Let USB serial stabilize
-    Serial.println(F("\n\n╔══════════════════════════════════╗"));
-    Serial.println(F("║     TAXI Mini Sumo Firmware     ║"));
-    Serial.println(F("║     v1.0 — XMotion V3           ║"));
-    Serial.println(F("╚══════════════════════════════════╝"));
-    #endif
-    
-    // ---- Critical: Stop motors immediately ----
-    // xmotionV3 constructor sets motor pins as outputs, but doesn't set values.
-    // StopMotors ensures motors are OFF during initialization.
-    xmotion.StopMotors(100);
-    
-    // ---- Initialize sensors ----
-    #if SERIAL_DEBUG
-    Serial.println(F("\n--- Sensor Init ---"));
-    #endif
-    
-    m60fInit();     // Start M60F async polling chain (Serial1 @ 250kbaud)
-    qreInit();      // Initialize QRE1113 pins
-    qreReadAll();   // Prime first readings
-    
-    // ---- Initialize actuators ----
-    #if SERIAL_DEBUG
-    Serial.println(F("\n--- Actuator Init ---"));
-    #endif
-    
-    motorsInit();   // Ensure motors stopped
-    ledRingInit();  // Initialize WS2812 ring
-    
-    // ---- Initialize controls ----
-    #if SERIAL_DEBUG
-    Serial.println(F("\n--- Control Init ---"));
-    #endif
-    
-    // START-STOP module on A0
-    pinMode(START_STOP_PIN, INPUT);
-    
-    // DIP switches (with internal pull-ups)
-    tacticPinsInit();
-    
-    // ---- Initialize IMU (optional — firmware continues if unavailable) ----
-    #if SERIAL_DEBUG
-    Serial.println(F("\n--- IMU Init ---"));
-    #endif
-    
-    imuInit();
-    
-    // ---- Initialize state machine ----
-    stateMachineInit();
-    
-    // ---- Startup visual confirmation ----
-    ledRingStartupAnimation();
-    
-    // ---- Display selected strategy ----
-    uint8_t strategy = tacticReadDIP();
-    #if SERIAL_DEBUG
-    Serial.print(F("\n--- READY --- Strategy: "));
-    Serial.print(strategy);
-    Serial.print(F(" — "));
-    Serial.println(tacticRegistry[strategy]->name);
-    Serial.println(F("Waiting for START-STOP signal on A0...\n"));
-    #endif
-    
-    // ---- Indicate readiness on LED ring ----
-    ledRingFillAll(LED_COLOR_IDLE);
-    FastLED.show();
-}
+  // FIRST: claim the motor pins. From power-on until now they float in
+  // input mode, which lets the driver chatter the motors (the ~0.5 s
+  // right-motor spin some of it is the bootloader blinking D13/RM_DIR).
+  motorInit();
+  motorsStop();
 
-// ============================================================================
-// MAIN LOOP — Non-blocking, full-speed execution
-// ============================================================================
+  // Startup grace period: 3 s before anything else happens. Lets the
+  // operator step back after power-on. Motors are already held stopped.
+  delay(3000);
+
+  Serial.begin(MONITOR_BAUD);
+  pinMode(PIN_START, INPUT_PULLUP);
+  pinMode(PIN_LED1, OUTPUT);
+  pinMode(PIN_LED2, OUTPUT);
+
+  // NanoLabs start module rule: the pin MUST read LOW at power-on
+  // (module armed, waiting for the referee start command). If it reads
+  // HIGH here, the module still holds the previous match's "on" state —
+  // the referee must send stop and the robot must be power-cycled.
+  // Lock hard and blink UL1 so this can never be mistaken for a ready robot.
+  if (digitalRead(PIN_START) == HIGH) {
+#if SERIAL_DEBUG
+    Serial.println(F("[TAXI] FATAL: start pin HIGH at boot - power cycle!"));
+#endif
+    while (true) {
+      digitalWrite(PIN_LED1, HIGH); delay(100);
+      digitalWrite(PIN_LED1, LOW);  delay(100);
+    }
+  }
+
+  sensorsInit();
+  strategiesInit();
+  RingInit();
+
+#if SERIAL_DEBUG
+  Serial.println(F("[TAXI] firmware up"));
+#endif
+  delay(500);   // give M60F sensors time to boot (10..50 ms each, generous)
+}
 
 void loop() {
-    // ---- 1. Update M60F sensors (async state machine, ~680µs per call) ----
-    // Only progresses one step per call — never blocks.
-    // Adds new distance data to m60fDistances[] as responses arrive.
-    m60fUpdateSensors();
-    
-    // ---- 2. Read QRE1113 line sensors (~800µs for all 4) ----
-    // Double-read pattern handles ATmega32U4 ADC mux settling.
-    qreReadAll();
-    
-    // ---- 3. Read IMU (if enabled, ~200µs I²C) ----
-    imuRead();
-    
-    // ---- 4. Run state machine decision engine ----
-    // Evaluates current state, checks sensor inputs, transitions as needed.
-    // Sets motor outputs directly (non-blocking).
-    stateMachineUpdate();
-    
-    // ---- 5. Update LED ring visual feedback ----
-    // Shows current state, sensor health, attack direction.
-    // Uses currentState from StateMachine and pidState from PIDController.
-    ledRingUpdate(
-        (uint8_t)currentState,
-        pidState.opponentDetected ? 
-            (pidState.error < -1.0f ? -1 : (pidState.error > 1.0f ? 1 : 0)) 
-            : 0,
-        m60fHealth
-    );
-    
-    // ---- 6. Debug output (disable for competition to save cycles) ----
-    #if SERIAL_DEBUG
-    static uint32_t lastDebugMs = 0;
-    if (millis() - lastDebugMs > 500) {  // Every 500ms
-        lastDebugMs = millis();
-        
-        // Compact one-line sensor summary
-        Serial.print(F("["));
-        Serial.print(millis());
-        Serial.print(F("ms] State:"));
-        
-        const char* states[] = {"IDLE","TACTIC","SEARCH","ATTACK","FLANK","EVADE","STOP"};
-        Serial.print(states[currentState]);
-        
-        Serial.print(F(" M60F:"));
-        for (uint8_t i = 0; i < M60F_COUNT; i++) {
-            if (m60fDistances[i] == M60F_INVALID_DIST) {
-                Serial.print(F("--- "));
-            } else {
-                Serial.print(m60fDistances[i]);
-                Serial.print(F("mm "));
-            }
-        }
-        
-        Serial.print(F(" QRE:"));
-        for (uint8_t i = 0; i < QRE_COUNT; i++) {
-            Serial.print(qreValues[i]);
-            Serial.print(qreIsEdge(i) ? F("! ") : F("  "));
-        }
-        
-        Serial.print(F(" PID:Kp="));
-        Serial.print(pidState.kp, 1);
-        Serial.print(F(" Kd="));
-        Serial.print(pidState.kd, 1);
-        Serial.print(F(" Err="));
-        Serial.print(pidState.error, 1);
-        
-        Serial.print(F(" Health:"));
-        for (uint8_t i = 0; i < M60F_COUNT; i++) {
-            Serial.print(m60fHealth[i]);
-            Serial.print(F(" "));
-        }
-        
-        Serial.println();
-    }
-    #endif
-    
-    // ---- TOTAL LOOP TIME: ~1.5–2.0ms ----
-    // Well within the 10ms M60F sensor sampling window.
-    // No delay() calls anywhere — the loop runs at maximum speed.
+  sensorsUpdate();          // 1 ToF read + line pass (all serial I/O here)
+  stateMachineUpdate();     // drives motors, no serial I/O
+  ringStatusUpdate();       // FastLED.show() LAST — blocks interrupts
+#if DEBUG_VERBOSE
+  debugDump();
+#endif
 }
-
-// ============================================================================
-// END OF FIRMWARE
-// ============================================================================
-// 
-// COMPETITION DAY QUICK REFERENCE:
-//   1. Charge batteries to 13.05V (LiHV mode)
-//   2. Power on — verify LED startup animation plays
-//   3. Check Serial monitor for sensor health (if debug enabled)
-//   4. Set DIP switches for desired strategy
-//   5. Place robot on dohyo, facing correct direction
-//   6. Wait for green ring = ready
-//   7. START-STOP module will trigger on competition signal
-//   8. Between rounds: check tires, blade edge, sensor lenses
-//
-// TROUBLESHOOTING:
-//   - Red LED at position N = M60F sensor N failed health check
-//   - Robot spins continuously = QRE threshold too low (recalibrate)
-//   - Robot charges off dohyo = QRE threshold too high or sensor detached
-//   - Robot doesn't react to opponent = check M60F serial bus wiring
-//   - Motors don't move = check battery voltage, XT30 connection
-// ============================================================================

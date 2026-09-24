@@ -1,360 +1,212 @@
-/**
- * Sensors.h — M60F ToF Async State Machine & QRE1113 Analog Reader
- * 
- * M60F: Non-blocking round-robin polling of 5 sensors on a shared half-duplex
- *       UART bus. Uses Serial1 (D0=RX, D1=TX) at 250kbaud.
- *       Implements the async state machine from ideas_and_proposal.md.
- * 
- * QRE1113: Fast analog reading with ADC double-sample pattern to avoid
- *          ATmega32U4 mux settling issues.
- * 
- * WHY THIS DESIGN (from Phase 3 decision Q2 = Option A):
- *   - Distance values enable zone-gated attack (closer = faster)
- *   - Distance-adaptive search (tight arcs for near opponent, wide for far)
- *   - Zero CPU blocking — 3.4ms sweep vs 10ms sensor window
- *   - All sensors on one pin pair preserves I/O for IMU and LED ring
+/*
+ * Sensors.h — M60F ToF bus + QRE1113 line sensors (header-only).
+ *
+ * ToF: round-robin, ONE sensor read per sensorsUpdate() call so the combat
+ * loop never blocks longer than ~2 ms on the shared bus.
+ * All 5 channels are normalised to millimetres in tofMm[] (ID3 is mm,
+ * the rest cm -> x10). 0 = invalid reading.
+ *
+ * Line: three QRE1113 modules (left A5, rear A4, right A1). Black interior
+ * reads HIGH, white border reads LOW (see Config.h). Edge = raw BELOW the
+ * sensor's white threshold; a Schmitt trigger latches it and only releases
+ * once clearly back above the black threshold. Debounced: LINE_DEBOUNCE_SAMPLES
+ * consecutive white reads confirm the edge.
+ *
+ * IMPORTANT (from Full_Robot_Test): finish all ToF reads BEFORE
+ * FastLED.show() — the ring bit-bang disables interrupts and would corrupt
+ * the serial bus. The state machine reads sensors first, updates the ring
+ * last.
  */
-
 #ifndef SENSORS_H
 #define SENSORS_H
 
 #include <Arduino.h>
+#include <SingleWireSerial.h>
 #include "Config.h"
+#include "DistanceSensor.h"
+#include "LineSensor.h"
 
-// ============================================================================
-// M60F GLOBAL STATE (volatile — accessed in main loop only, but declared here)
-// ============================================================================
+// ---------------------------------------------------------------- ToF -------
+// Index layout: [0]=id1 side right, [1]=id2 front right, [2]=id3 center,
+//               [3]=id4 front left,  [4]=id5 side left.
+uint16_t tofMm[TOF_SENSOR_COUNT];
+bool     tofValid[TOF_SENSOR_COUNT];
 
-// Distance array: distances[0..4] in mm. 0xFFF = invalid/no reading.
-volatile uint16_t m60fDistances[M60F_COUNT] = {M60F_INVALID_DIST};
+// Bearing weights (left negative, right positive) matching the layout above.
+static const int8_t TOF_WEIGHT[TOF_SENSOR_COUNT] = { 4, 2, 0, -2, -4 };
 
-// Health tracking for failsafe degradation
-uint8_t m60fHealth[M60F_COUNT] = {HEALTH_WINDOW};
-
-// Async state machine variables
-static uint8_t  m60fCurrentSensor = 0;
-static char     m60fRxBuf[M60F_RESPONSE_MAX];
-static uint8_t  m60fRxLen = 0;
-static bool     m60fWaitingResp = false;
-static uint32_t m60fRequestTime = 0;
-
-// ============================================================================
-// QRE1113 GLOBAL STATE
-// ============================================================================
-
-// Last analog readings (0–1023). Higher = darker = more likely edge.
-uint16_t qreValues[QRE_COUNT] = {0};
-
-// Debounce counters for edge detection
-uint8_t qreEdgeCounter[QRE_COUNT] = {0};
-
-// Calibrated thresholds (set by calibration routine)
-uint16_t qreThresholds[QRE_COUNT] = {
-    QRE_DEFAULT_THRESHOLD,
-    QRE_DEFAULT_THRESHOLD,
-    QRE_DEFAULT_THRESHOLD,
-    QRE_DEFAULT_THRESHOLD
+static SingleWireSerial tofBus(false);           // bus on D4 (Config: PIN_TOF_BUS)
+static DistanceSensor tofSensors[TOF_SENSOR_COUNT] = {
+  DistanceSensor(&tofBus, 1), DistanceSensor(&tofBus, 2),
+  DistanceSensor(&tofBus, 3), DistanceSensor(&tofBus, 4),
+  DistanceSensor(&tofBus, 5)
 };
+static uint8_t tofCursor = 0;
+static bool    tofAttackScan = false;            // true -> only front 3 ids
+static uint8_t frontCursor = 0;                  // cycles front idx 1,2,3
 
-// ============================================================================
-// M60F ASYNC STATE MACHINE
-// ============================================================================
+// Simple health counters per sensor (0..TOF_HEALTH_MAX).
+static uint8_t tofHealth[TOF_SENSOR_COUNT];
 
-/**
- * Send a distance request to a specific M60F sensor.
- * Format: "R<id_hex><register_hex>\n" e.g., "R0001\n" = read sensor 0, register 01 (mm).
- * 
- * After sending, discards TX echo (bytes appear on RX due to D0-D1 bridge).
- * Sets waitingResp = true so updateSensors() knows to collect the response.
- */
-void m60fRequestDistance(uint8_t sensorId) {
-    // Flush any stale RX data
-    while (M60F_SERIAL.available()) {
-        M60F_SERIAL.read();
-    }
-    
-    // Build command: "R<ID><REG>\n"
-    char cmd[8];
-    sprintf(cmd, "R%02X%02X\n", sensorId, M60F_REG_DIST_MM);
-    
-    // Transmit
-    M60F_SERIAL.print(cmd);
-    
-    // Discard TX echo (bridge loops TX back to RX)
-    uint32_t tStart = micros();
-    uint8_t echoLen = strlen(cmd);
-    uint8_t echoGot = 0;
-    while (echoGot < echoLen && (micros() - tStart) < 500) {
-        if (M60F_SERIAL.available()) {
-            M60F_SERIAL.read();
-            echoGot++;
-        }
-    }
-    
-    // Reset RX buffer and arm timeout
-    m60fRxLen = 0;
-    m60fWaitingResp = true;
-    m60fRequestTime = micros();
+// Number of sensors currently considered alive. A sensor is "healthy" when
+// its health counter is at least half full — i.e. it has been answering
+// consistently for the last few polls.
+uint8_t sensorsHealthyCount() {
+  uint8_t n = 0;
+  for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++)
+    if (tofHealth[i] >= TOF_HEALTH_MAX / 2) n++;
+  return n;
 }
 
 /**
- * Non-blocking M60F sensor update.
- * Call once per main loop iteration. Manages the round-robin polling chain.
- * 
- * Two modes:
- *   1. WAITING: Collects RX bytes until '\n' or timeout
- *   2. IDLE: Sends next request
- * 
- * On response: parses hex distance, updates m60fDistances[], advances to next sensor.
- * On timeout: stores 0xFFF (invalid), penalizes health counter, advances.
+ * Switch the ToF poll pattern. In attack mode only the three front sensors
+ * (ids 2, 3, 4) are cycled -> ~3x faster updates on the sensors that decide
+ * the fight; the side readings go stale, which is fine while pushing.
  */
-void m60fUpdateSensors() {
-    if (!m60fWaitingResp) {
-        // IDLE: kick off next request
-        m60fRequestDistance(m60fCurrentSensor);
-        return;
-    }
-    
-    // WAITING: collect response bytes
-    while (M60F_SERIAL.available()) {
-        char c = M60F_SERIAL.read();
-        
-        if (c == '\n') {
-            // End of response — parse
-            m60fRxBuf[m60fRxLen] = '\0';
-            
-            if (m60fRxLen > 0) {
-                m60fDistances[m60fCurrentSensor] = 
-                    (uint16_t)strtol(m60fRxBuf, nullptr, 16);
-                
-                // Validate: 0xFFF means sensor reported invalid reading
-                if (m60fDistances[m60fCurrentSensor] != M60F_INVALID_DIST) {
-                    // Successful read — boost health
-                    m60fHealth[m60fCurrentSensor] = 
-                        min(m60fHealth[m60fCurrentSensor] + HEALTH_INCREMENT, 
-                            (uint8_t)HEALTH_WINDOW);
-                }
-            } else {
-                // Empty response = failure
-                m60fDistances[m60fCurrentSensor] = M60F_INVALID_DIST;
-            }
-            
-            // Advance to next sensor
-            m60fRxLen = 0;
-            m60fWaitingResp = false;
-            m60fCurrentSensor = (m60fCurrentSensor + 1) % M60F_COUNT;
-            
-            // Chain immediately to next sensor
-            m60fRequestDistance(m60fCurrentSensor);
-            return;
-        }
-        
-        // Not newline — buffer the byte
-        if (m60fRxLen < M60F_RESPONSE_MAX - 1) {
-            m60fRxBuf[m60fRxLen++] = c;
-        }
-    }
-    
-    // Timeout guard — if sensor doesn't respond within TIMEOUT_US
-    if ((micros() - m60fRequestTime) > M60F_TIMEOUT_US) {
-        m60fDistances[m60fCurrentSensor] = M60F_INVALID_DIST;
-        
-        // Penalize health on timeout
-        if (m60fHealth[m60fCurrentSensor] >= HEALTH_DECREMENT) {
-            m60fHealth[m60fCurrentSensor] -= HEALTH_DECREMENT;
-        } else {
-            m60fHealth[m60fCurrentSensor] = 0;
-        }
-        
-        #if SERIAL_DEBUG
-        Serial.print(F("[M60F] Timeout sensor "));
-        Serial.println(m60fCurrentSensor);
-        #endif
-        
-        // Skip to next sensor
-        m60fRxLen = 0;
-        m60fWaitingResp = false;
-        m60fCurrentSensor = (m60fCurrentSensor + 1) % M60F_COUNT;
-        m60fRequestDistance(m60fCurrentSensor);
-    }
+void sensorsSetAttackScan(bool on) { tofAttackScan = on; }
+
+// --------------------------------------------------------------- Line -------
+// Three QRE1113 modules. Raw ADC in lineRaw[]; latched edge flags below.
+// Edge = white border = LOW reading, per-sensor thresholds in Config.h.
+LineSensor lineSensL(PIN_LINE_L, LINE_LEFT_WHITE_THRESHOLD);
+LineSensor lineSensR(PIN_LINE_R, LINE_RIGHT_WHITE_THRESHOLD);
+LineSensor lineSensB(PIN_LINE_B, LINE_REAR_WHITE_THRESHOLD);
+
+bool lineLeft = false, lineRear = false, lineRight = false;   // latched edge flags
+uint16_t lineRaw[3];                                          // 0=L 1=rear 2=R
+static uint8_t lineEdgeCount[3];                              // white-hit debounce
+
+// -------------------------------------------------------------- Logic -------
+// One-time hardware bring-up: bus down, baud set, line pins as inputs,
+// all readings invalidated until the first real poll.
+void sensorsInit() {
+  pinMode(PIN_TOF_BUS, INPUT);          // release SIG; pull-up holds idle high
+  tofBus.begin(TOF_BUS_BAUD);
+  tofBus.setTimeout(2);                 // 2 ms: ~4x a full reply @115200
+  pinMode(PIN_TRIMPOT, INPUT);
+  lineSensL.begin();
+  lineSensR.begin();
+  lineSensB.begin();
+  for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++) {
+    tofMm[i] = 0; tofValid[i] = false; tofHealth[i] = TOF_HEALTH_MAX;
+  }
 }
 
-/**
- * Initialize M60F serial bus and kick off the async chain.
- * Called once from setup().
- */
-void m60fInit() {
-    M60F_SERIAL.begin(M60F_BAUD_RATE);
-    
-    // Allow sensors to boot (start-up time: 10–50ms per datasheet)
-    delay(100);
-    
-    // Prime the async chain with first request
-    m60fRequestDistance(0);
-    
-    #if SERIAL_DEBUG
-    Serial.println(F("[M60F] Initialized at 250000 baud, 5 sensors"));
-    #endif
+// Live master speed, percent between TRIMPOT_MIN_SCALE_PCT and 100.
+// Called by the state machine where speed is derived.
+uint8_t trimpotScale() {
+  return (uint8_t)map(analogRead(PIN_TRIMPOT), 0, 1023, TRIMPOT_MIN_SCALE_PCT, 100);
 }
 
-/**
- * Check if all M60F sensors are responding.
- * Used during pre-fight calibration/health check.
- * Returns true only when every sensor has returned at least one valid reading.
- */
-bool m60fAllHealthy() {
-    for (uint8_t i = 0; i < M60F_COUNT; i++) {
-        if (m60fHealth[i] < HEALTH_FAIL_THRESHOLD) return false;
-    }
-    return true;
+// Read only the ToF sensor at the active cursor (round-robin), normalise mm.
+static void tofReadOne() {
+  // Pick the sensor index this call: full round-robin, or front trio
+  // (indices 1,2,3 = ids 2,3,4) when in attack scan mode.
+  uint8_t i;
+  if (tofAttackScan) {
+    i = 1 + frontCursor;                         // cycles 1,2,3
+    frontCursor = (frontCursor + 1) % 3;
+  } else {
+    i = tofCursor;
+    tofCursor = (tofCursor + 1) % TOF_SENSOR_COUNT;
+  }
+  DistanceSensor& s = tofSensors[i];
+
+  bool ok; uint16_t mm;
+  if (s.mDeviceIndex == 3) {
+    uint16_t raw = s.readDistance_mm();     // 0xFFF sentinel = no response
+    ok = (raw != TOF_INVALID_MM && raw >= TOF_MIN_VALID_MM && raw <= TOF_MAX_VALID_MM);
+    mm = raw;
+  } else {
+    uint16_t raw = s.readDistance_cm();     // 0xFF sentinel = no response
+    mm = (uint16_t)raw * 10;
+    ok = (raw != TOF_INVALID_CM && mm >= TOF_MIN_VALID_MM && mm <= TOF_MAX_VALID_MM);
+  }
+  tofValid[i] = ok;
+  tofMm[i]    = ok ? mm : 0;
+  if (ok) { if (tofHealth[i] < TOF_HEALTH_MAX) tofHealth[i]++; }
+  else    { if (tofHealth[i] > 0)              tofHealth[i]--; }
 }
 
-/**
- * Count healthy M60F sensors for degradation level assessment.
- */
-uint8_t m60fHealthyCount() {
-    uint8_t count = 0;
-    for (uint8_t i = 0; i < M60F_COUNT; i++) {
-        if (m60fHealth[i] >= HEALTH_FAIL_THRESHOLD) count++;
-    }
-    return count;
-}
+static void lineReadAll() {
+  lineRaw[0] = lineSensL.readRaw();
+  lineRaw[1] = lineSensB.readRaw();
+  lineRaw[2] = lineSensR.readRaw();
 
-// ============================================================================
-// QRE1113 ANALOG FAST READ
-// ============================================================================
+  // Per-sensor Schmitt-trigger thresholds, indexed like lineRaw[]
+  // (0 = left, 1 = rear, 2 = right) and the debug print order.
+  static const uint16_t WHITE_THR[3] = {
+    LINE_LEFT_WHITE_THRESHOLD, LINE_REAR_WHITE_THRESHOLD, LINE_RIGHT_WHITE_THRESHOLD
+  };
+  static const uint16_t BLACK_THR[3] = {
+    LINE_LEFT_BLACK_THRESHOLD, LINE_REAR_BLACK_THRESHOLD, LINE_RIGHT_BLACK_THRESHOLD
+  };
+  bool* flags[3] = { &lineLeft, &lineRear, &lineRight };
 
-/**
- * Read all 4 QRE1113 line sensors.
- * Uses double-read pattern: first read discards ADC mux settling charge,
- * second read provides the actual value.
- * 
- * Total time: ~800µs for all 4 sensors (2 reads × 4 sensors × ~100µs each).
- * Call once per main loop iteration.
- */
-void qreReadAll() {
-    const uint8_t pins[QRE_COUNT] = {QRE_FL_PIN, QRE_FR_PIN, QRE_RL_PIN, QRE_RR_PIN};
-    
-    for (uint8_t i = 0; i < QRE_COUNT; i++) {
-        #if QRE_ADC_DISCARD_FIRST
-        analogRead(pins[i]);                // Discard — clears mux charge
-        #endif
-        qreValues[i] = analogRead(pins[i]); // Actual reading (0–1023)
-    }
-}
-
-/**
- * Check if a specific QRE sensor is detecting the edge.
- * Uses debouncing: value must exceed threshold for QRE_DEBOUNCE_COUNT
- * consecutive reads before reporting true.
- * 
- * @param sensorIndex  0=FL, 1=FR, 2=RL, 3=RR
- * @return true if edge is detected (debounced)
- */
-bool qreIsEdge(uint8_t sensorIndex) {
-    if (sensorIndex >= QRE_COUNT) return false;
-    
-    if (qreValues[sensorIndex] > qreThresholds[sensorIndex]) {
-        qreEdgeCounter[sensorIndex]++;
-        if (qreEdgeCounter[sensorIndex] >= QRE_DEBOUNCE_COUNT) {
-            qreEdgeCounter[sensorIndex] = QRE_DEBOUNCE_COUNT; // Clamp
-            return true;
-        }
+  for (uint8_t i = 0; i < 3; i++) {
+    if (*flags[i]) {
+      // Already on edge: hold it until clearly back on black (no debounce on
+      // recovery — we only need an unambiguous return to the interior).
+      if (lineRaw[i] > BLACK_THR[i]) *flags[i] = false;
     } else {
-        qreEdgeCounter[sensorIndex] = 0;
+      // Off edge: a run of white reads arms the debounce, then commits.
+      if (lineRaw[i] < WHITE_THR[i]) {
+        if (lineEdgeCount[i] < LINE_DEBOUNCE_SAMPLES) lineEdgeCount[i]++;
+        if (lineEdgeCount[i] >= LINE_DEBOUNCE_SAMPLES) *flags[i] = true;
+      } else {
+        lineEdgeCount[i] = 0;
+      }
     }
-    return false;
+  }
+}
+
+/** One ToF read + one line pass. Call exactly once per loop(). */
+void sensorsUpdate() {
+  tofReadOne();
+  lineReadAll();
+}
+
+/** Any debounced edge active right now? Used by the EVADE override. */
+bool sensorsAnyEdge() { return lineLeft || lineRear || lineRight; }
+
+/**
+ * Which edge sensor tripped: 0=left, 1=rear, 2=right, -1 if none.
+ * Priority rear > left > right (rear is the most dangerous: we are being
+ * pushed from behind).
+ */
+int8_t sensorsEdgeIndex() {
+  if (lineRear)  return 1;
+  if (lineLeft)  return 0;
+  if (lineRight) return 2;
+  return -1;
 }
 
 /**
- * Check if ANY QRE sensor detects the edge.
- * Returns which sensor triggered (0-3) or -1 if none.
+ * Opponent bearing from the ToF array: -100 = hard left, 0 = dead ahead,
+ * +100 = hard right, 127 = nothing visible. Weighted vote where each valid
+ * sensor contributes its geometric weight scaled by inverse distance —
+ * close reflections dominate, far/uncertain ones barely count.
  */
-int8_t qreAnyEdge() {
-    if (qreIsEdge(0)) return 0;  // Front-Left
-    if (qreIsEdge(1)) return 1;  // Front-Right
-    if (qreIsEdge(2)) return 2;  // Rear-Left
-    if (qreIsEdge(3)) return 3;  // Rear-Right
-    return -1;                    // No edge
+int8_t sensorsOpponent() {
+  int32_t wsum = 0, wtot = 0;
+  for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++) {
+    if (!tofValid[i]) continue;
+    int32_t w = (int32_t)TOF_MAX_VALID_MM + 1 - tofMm[i];   // near -> heavy
+    wsum += (int32_t)TOF_WEIGHT[i] * 25 * w;
+    wtot += w;
+  }
+  if (wtot == 0) return 127;
+  int32_t b = wsum / wtot;
+  return (int8_t)constrain(b, -100, 100);
 }
 
-/**
- * Check if both front QRE sensors detect edge (robot is fully over line).
- */
-bool qreBothFrontEdge() {
-    return qreIsEdge(0) && qreIsEdge(1);
-}
-
-/**
- * Initialize QRE pins. Called once from setup().
- * Pins default to INPUT (analogRead handles this), but explicit for clarity.
- */
-void qreInit() {
-    pinMode(QRE_FL_PIN, INPUT);
-    pinMode(QRE_FR_PIN, INPUT);
-    pinMode(QRE_RL_PIN, INPUT);
-    pinMode(QRE_RR_PIN, INPUT);
-    
-    // Prime the readings
-    qreReadAll();
-    
-    #if SERIAL_DEBUG
-    Serial.println(F("[QRE] 4 sensors initialized on A1, A2, A4, A5"));
-    #endif
-}
-
-// ============================================================================
-// CALIBRATION HELPERS
-// ============================================================================
-
-/**
- * Run QRE calibration: robot rotates in place, records min/max per sensor,
- * sets threshold at midpoint. Stores in qreThresholds[].
- * 
- * Call this during pre-fight with DIP set to calibration mode (all UP = strategy 7).
- */
-void qreCalibrate() {
-    uint16_t qreMin[QRE_COUNT] = {1023, 1023, 1023, 1023};
-    uint16_t qreMax[QRE_COUNT] = {0, 0, 0, 0};
-    
-    // Rotate in place for 3 seconds, sampling continuously
-    uint32_t tStart = millis();
-    while (millis() - tStart < 3000) {
-        // Rotate slowly
-        xmotion.MotorControl(60, -60);  // Right motor forward, left backward
-        
-        qreReadAll();
-        for (uint8_t i = 0; i < QRE_COUNT; i++) {
-            if (qreValues[i] < qreMin[i]) qreMin[i] = qreValues[i];
-            if (qreValues[i] > qreMax[i]) qreMax[i] = qreValues[i];
-        }
-        delay(10);  // Blocking is OK during calibration (not combat)
-    }
-    
-    // Stop
-    xmotion.MotorControl(0, 0);
-    
-    // Set thresholds at 60% between min and max (conservative — avoid false positives)
-    for (uint8_t i = 0; i < QRE_COUNT; i++) {
-        uint16_t range = qreMax[i] - qreMin[i];
-        if (range > 50) {  // Sufficient contrast — valid calibration
-            qreThresholds[i] = qreMin[i] + (uint16_t)(range * 0.6f);
-        } else {
-            // Low contrast — use default
-            qreThresholds[i] = QRE_DEFAULT_THRESHOLD;
-        }
-        
-        #if SERIAL_DEBUG
-        Serial.print(F("[QRE Cal] Sensor "));
-        Serial.print(i);
-        Serial.print(F(": min="));
-        Serial.print(qreMin[i]);
-        Serial.print(F(", max="));
-        Serial.print(qreMax[i]);
-        Serial.print(F(", thr="));
-        Serial.println(qreThresholds[i]);
-        #endif
-    }
+/** Smallest currently-valid ToF distance in mm; ok=false when none. */
+uint16_t sensorsClosestMm(bool* ok) {
+  uint16_t best = 0xFFFF;
+  for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++)
+    if (tofValid[i] && tofMm[i] < best) best = tofMm[i];
+  *ok = (best != 0xFFFF);
+  return *ok ? best : 0;
 }
 
 #endif // SENSORS_H

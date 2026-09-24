@@ -1,0 +1,19 @@
+stateDiagram-v2
+  IDLE --> TACTIC: start LOW (50ms debounce)
+  TACTIC --> SEARCH: opening done
+  SEARCH --> ATTACK: opponent front
+  SEARCH --> FLANK: opponent on side
+  ATTACK --> FLANK: opponent slid off center
+  FLANK --> ATTACK: re-centered
+  ATTACK --> SEARCH: lost >400ms
+  FLANK --> SEARCH: lost >400ms
+  EVADE --> SEARCH: after escape
+  SEARCH --> EVADE
+  ATTACK --> EVADE
+  FLANK --> EVADE
+  TACTIC --> EVADE
+  EVADE --> STOP
+  TACTIC --> STOP
+  SEARCH --> STOP
+  ATTACK --> STOP
+  FLANK --> STOP
