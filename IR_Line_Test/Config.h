@@ -17,11 +17,11 @@
 
 // Per-sensor thresholds (from TAXI_Firmware/Config.h). Raw ADC is HIGH over
 // black (interior) and LOW over white (border); edge = white = LOW reading.
-#define LINE_LEFT_WHITE_THRESHOLD   350   // LEFT  raw BELOW this = white border
+#define LINE_LEFT_WHITE_THRESHOLD   400   // LEFT  raw BELOW this = white border
 #define LINE_LEFT_BLACK_THRESHOLD   800   // LEFT  raw ABOVE this = black interior
 #define LINE_REAR_WHITE_THRESHOLD   765   // REAR  raw BELOW this = white border
 #define LINE_REAR_BLACK_THRESHOLD   820   // REAR  raw ABOVE this = black interior
-#define LINE_RIGHT_WHITE_THRESHOLD  350   // RIGHT raw BELOW this = white border
+#define LINE_RIGHT_WHITE_THRESHOLD  400   // RIGHT raw BELOW this = white border
 #define LINE_RIGHT_BLACK_THRESHOLD  800   // RIGHT raw ABOVE this = black interior
 #define LINE_DEBOUNCE_SAMPLES       2
 
