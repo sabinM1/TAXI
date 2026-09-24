@@ -119,9 +119,9 @@ loop():  sensorsUpdate()      // 1 ToF read + 1 line pass — ALL serial I/O
 |---|---|
 | `ST_IDLE` | Motors stopped; waits for start signal HIGH (read raw each loop) |
 | `ST_TACTIC` | Plays the DIP-selected opening timed-step sequence, then → SEARCH |
-| `ST_SEARCH` | Spin/arc/sweep pattern; flips direction every 3 s if blind; on sight picks ATTACK (|bearing| ≤ 15) or FLANK |
+| `ST_SEARCH` | Spin/arc/sweep pattern; flips direction every 3 s if blind; on sight picks ATTACK (\|bearing\| ≤ `TARGET_ON_AXIS_BAND`) or FLANK |
 | `ST_ATTACK` | Target ahead: distance-proportional push + smooth proportional steering; front-only ToF scan |
-| `ST_FLANK` | Target off to a side (|bearing| > 15): bang-bang pivot at fixed speed until re-centered, then → ATTACK |
+| `ST_FLANK` | Target off to a side (\|bearing\| > `TARGET_ON_AXIS_BAND`): bang-bang pivot at fixed speed until re-centered, then → ATTACK |
 | `ST_EVADE` | Edge override, two timed phases: FLEE (≥15 ms blind, keeps fleeing while any sensor reads white, ≤300 ms; rear edge drives **forward**) → TURN (fixed 80 ms pivot away from the edge) → SEARCH |
 | `ST_STOP` | Start signal lost → motors off, latched until power cycle |
 
@@ -167,9 +167,10 @@ All in `Config.h` (pins listed in §3 are omitted here).
 | `ATTACK_SPEED_CLOSE_PCT` | 100 | Push speed at/below `ATTACK_CLOSE_DIST_MM` | 40–100 |
 | `ATTACK_SPEED_FAR_PCT` | 60 | Push speed at/above `ATTACK_FAR_DIST_MM` | 30–100 |
 | `ATTACK_CLOSE_DIST_MM` / `ATTACK_FAR_DIST_MM` | 150 / 400 | Speed ramp endpoints | 50–800 |
-| `ATTACK_STEER_GAIN_PCT` | 50 | Max differential at bearing ±100 (% of base) | 10–100 |
+| `ATTACK_STEER_GAIN_PCT` | 70 | Max differential at bearing ±100 (% of base) — higher turns onto the opponent harder | 10–100 |
 | `SEARCH_SPEED_PCT` | 45 | Base speed of all search patterns | 20–80 |
-| `FLANK_TURN_SPEED_PCT` | 60 | Pivot speed while re-centering | 30–90 |
+| `FLANK_TURN_SPEED_PCT` | 80 | Pivot speed while re-centering (inner wheel counterspins at half) | 30–100 |
+| `TARGET_ON_AXIS_BAND` | 15 | Bearing band treated as "dead ahead" (ATTACK); wider goes to FLANK | 5–40 |
 | `EVADE_REVERSE_SPEED_PCT` | −80 | FLEE speed for front edges (negative = reverse) | −100..−50 |
 | `TRIMPOT_MIN_SCALE_PCT` | 50 | Trimpot fully-CCW master speed | 0–100 |
 | `TOF_HEALTH_MAX` | 8 | Per-sensor health counter ceiling | — |

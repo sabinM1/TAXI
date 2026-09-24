@@ -5,7 +5,8 @@
  *          from any combat state, and STOP when the Start/Stop module drops.
  *
  * ATTACK vs FLANK — both mean "the opponent is on a ToF sensor", they only
- * differ in how far off-axis it is (split at +/-15 bearing units):
+ * differ in how far off-axis it is (split at +/-TARGET_ON_AXIS_BAND bearing
+ * units, see Config.h):
  *   ATTACK  target is roughly ahead -> ram it. Speed comes from the distance
  *           (fast up close, cautious far), steering is a smooth proportional
  *           correction (see attackUpdate()).
@@ -13,7 +14,7 @@
  *           it is back in front, then hand over to ATTACK (see flankUpdate()).
  *           It is a re-centering turn, not an orbit around the opponent.
  * SEARCH picks the right one on sight; the two also swap automatically while
- * fighting if the bearing drifts in or out of the +/-15 window.
+ * fighting if the bearing drifts in or out of the band.
  *
  * Start module (A0, INPUT_PULLUP): HIGH = fight, LOW = armed/stopped
  * (NanoLabs module, active-high per official docs; the Full_Robot_Test
@@ -155,7 +156,7 @@ static int attackBaseSpeed(uint16_t mm, bool ok) {
 }
 
 /**
- * Chase + push. Used while the opponent is centred (|bearing| <= 15).
+ * Chase + push. Used while the opponent is centred (|bearing| <= TARGET_ON_AXIS_BAND).
  * Speed: attackBaseSpeed() tapers with distance — full power at
  * ATTACK_CLOSE_DIST_MM, ATTACK_SPEED_FAR_PCT at ATTACK_FAR_DIST_MM.
  * Steering: one smooth proportional term — bearing > 0 (opponent to the
@@ -176,13 +177,13 @@ static void attackUpdate() {
 }
 
 /**
- * Re-centering pivot. Used while the opponent is off-axis (|bearing| > 15),
- * i.e. it is only on a side ToF sensor. Bang-bang: one wheel forward at
- * FLANK_TURN_SPEED_PCT, the other reversed at half that, until the bearing
- * re-enters +/-15 (the caller then switches to ST_ATTACK). 127 means lost —
- * do nothing and let the caller's timeout drop us back to SEARCH.
- * Unlike ATTACK this never pushes blind: a pivot in the wrong direction is
- * worse than standing still.
+ * Re-centering pivot. Used while the opponent is off-axis
+ * (|bearing| > TARGET_ON_AXIS_BAND), i.e. it is only on a side ToF sensor.
+ * Bang-bang: one wheel forward at FLANK_TURN_SPEED_PCT, the other reversed at
+ * half that, until the bearing re-enters the band (the caller then switches to
+ * ST_ATTACK). 127 means lost — do nothing and let the caller's timeout drop us
+ * back to SEARCH. Unlike ATTACK this never pushes blind: a pivot in the wrong
+ * direction is worse than standing still.
  */
 static void flankUpdate() {
   // Opponent on a side sensor: turn toward it until it is in front.
@@ -394,7 +395,8 @@ void stateMachineUpdate() {
       int8_t bearing = sensorsOpponent();
       if (bearing != 127) {
         lastSeenMs = millis();
-        gotoState((bearing >= -15 && bearing <= 15) ? ST_ATTACK : ST_FLANK);
+        gotoState((bearing >= -TARGET_ON_AXIS_BAND && bearing <= TARGET_ON_AXIS_BAND)
+                      ? ST_ATTACK : ST_FLANK);
         break;
       }
       searchUpdate(STRATEGIES[strategyIndex].search);
@@ -413,7 +415,7 @@ void stateMachineUpdate() {
                               : attackBaseSpeed(0xFFFF, false);
           motorsSet(push, push);
         }
-      } else if (bearing < -15 || bearing > 15) {
+      } else if (bearing < -TARGET_ON_AXIS_BAND || bearing > TARGET_ON_AXIS_BAND) {
         gotoState(ST_FLANK);        // opponent slid off center
       } else {
         attackUpdate();
@@ -430,7 +432,7 @@ void stateMachineUpdate() {
         } else {
           motorsStop();
         }
-      } else if (bearing >= -15 && bearing <= 15) {
+      } else if (bearing >= -TARGET_ON_AXIS_BAND && bearing <= TARGET_ON_AXIS_BAND) {
         gotoState(ST_ATTACK);
       } else {
         flankUpdate();

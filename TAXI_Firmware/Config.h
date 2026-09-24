@@ -147,11 +147,23 @@
 #define ATTACK_SPEED_FAR_PCT    60
 #define ATTACK_CLOSE_DIST_MM    150   // <= this: full push
 #define ATTACK_FAR_DIST_MM      400   // >= this: cautious push
-#define ATTACK_STEER_GAIN_PCT   50    // % of base speed applied as full
-                                      // differential at bearing = +/-100
+#define ATTACK_STEER_GAIN_PCT   70    // % of base speed applied as full
+                                      // differential at bearing = +/-100.
+                                      // Higher = steers onto the opponent harder
+                                      // while pushing (more aggressive tracking).
+
+// Target "dead ahead" band, in bearing units (scale of sensorsOpponent():
+// -100 hard left, 0 dead ahead, +100 hard right).
+//   |bearing| <= this  -> ATTACK: keep pushing, steer with the gain above
+//   anything wider     -> FLANK: pivot on the spot to re-center first
+// Narrower band = the robot stops to pivot sooner (turns harder, advances less);
+// wider = it keeps committing forward and tracks with the differential only.
+#define TARGET_ON_AXIS_BAND     15
 
 #define SEARCH_SPEED_PCT        45    // base speed of all search patterns
-#define FLANK_TURN_SPEED_PCT    60    // pivot push while re-centering a target
+#define FLANK_TURN_SPEED_PCT    80    // pivot speed while re-centering a target
+                                      // (inner wheel counterspins at half this),
+                                      // raised for a faster turn onto the target
 #define EVADE_REVERSE_SPEED_PCT -80   // escape burst away from an edge
 
 // ============================================================================
