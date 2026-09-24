@@ -167,6 +167,7 @@ static void debugDump() {
   Serial.print(F("  Start=")); Serial.println(digitalRead(PIN_START));
   Serial.print(F(" Bearing=")); Serial.print(targetBearing());
   Serial.print(F(" (raw ")); Serial.print(sensorsOpponent()); Serial.print(')');
+  Serial.print(F("  Contact=")); Serial.print(sensorsContact() ? 1 : 0);
   Serial.print(F("   Closest=")); if (ok) Serial.print(mm); else Serial.print(F("---"));
   Serial.print(F("mm  Health=")); Serial.print(sensorsHealthyCount());
   Serial.print('/'); Serial.print(TOF_SENSOR_COUNT); Serial.println();

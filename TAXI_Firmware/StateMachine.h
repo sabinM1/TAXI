@@ -220,6 +220,9 @@ static int attackBaseSpeed(uint16_t mm, bool ok) {
  * Steering: one smooth proportional term — bearing > 0 (opponent to the
  * right) slows the right motor and vice-versa, scaled by ATTACK_STEER_GAIN_PCT.
  * Stamps lastSeenMs so the caller's lost-target timeout stays armed.
+ *
+ * NOT used at blade contact: the ST_ATTACK body intercepts that case first, so
+ * this always runs with at least some standoff (see PUSH_CONTACT_DIST_MM).
  */
 static void attackUpdate() {
   int8_t bearing = targetBearing();
@@ -468,6 +471,16 @@ void stateMachineUpdate() {
     }
 
     case ST_ATTACK: {
+      // Blade contact beats everything else in this state: both wheels full
+      // ahead, no steering trim, and no switch to FLANK. lastSeenMs is stamped
+      // because the opponent is very much visible — without it the lost-target
+      // timeout would eventually pull the robot out of its own shove.
+      if (sensorsContact()) {
+        motorsSet(PUSH_CONTACT_SPEED_PCT, PUSH_CONTACT_SPEED_PCT);
+        lastSeenMs = millis();
+        break;
+      }
+
       int8_t bearing = degraded ? 127 : targetBearing();
       if (bearing == 127) {
         if (millis() - lastSeenMs > ATTACK_TARGET_LOST_MS) {

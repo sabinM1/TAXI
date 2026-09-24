@@ -120,7 +120,7 @@ loop():  sensorsUpdate()      // 1 ToF read + 1 line pass — ALL serial I/O
 | `ST_IDLE` | Motors stopped; waits for start signal HIGH (read raw each loop) |
 | `ST_TACTIC` | Plays the DIP-selected opening timed-step sequence, then → SEARCH |
 | `ST_SEARCH` | Spin/arc/sweep pattern; flips direction every 3 s if blind; on sight picks ATTACK (\|bearing\| ≤ `TARGET_ON_AXIS_BAND`) or FLANK |
-| `ST_ATTACK` | Target ahead (\|bearing\| ≤ `TARGET_FLANK_BAND` while in it): distance-proportional push + proportional steering; front-only ToF scan |
+| `ST_ATTACK` | Target ahead (\|bearing\| ≤ `TARGET_FLANK_BAND` while in it): distance-proportional push + proportional steering; front-only ToF scan. At blade contact (≤ `PUSH_CONTACT_DIST_MM` on the middle sensor) both wheels go flat out and the steering trim is skipped |
 | `ST_FLANK` | Target off-axis (\|bearing\| > `TARGET_FLANK_BAND`): pivot proportional to the bearing, returns to ATTACK below `TARGET_ON_AXIS_BAND` |
 | `ST_EVADE` | Edge override, two timed phases: FLEE (≥15 ms blind, keeps fleeing while any sensor reads white, ≤300 ms; rear edge drives **forward**) → TURN (fixed 80 ms pivot away from the edge) → SEARCH |
 | `ST_STOP` | Start signal lost → motors off, latched until power cycle |
@@ -135,6 +135,7 @@ loop():  sensorsUpdate()      // 1 ToF read + 1 line pass — ALL serial I/O
 | | `sensorsOpponent()` | Bearing −100..+100 (127 = nothing), inverse-distance weighted; the front trio outranks the side sensors |
 | `StateMachine.h` | `targetBearing()` | The bearing actually steered on: live reading blended with the fading bearing memory |
 | | `sensorsClosestMm()` | Nearest valid distance |
+| | `sensorsContact()` | True when the MIDDLE sensor reads blade contact (<`PUSH_CONTACT_DIST_MM`) |
 | | `sensorsAnyEdge()` / `sensorsEdgeIndex()` | Debounced edge flags, priority rear>left>right |
 | | `sensorsHealthyCount()` | Live sensors (health counters) |
 | | `sensorsSetAttackScan()` | Front-3-only polling during combat |
@@ -167,6 +168,7 @@ All in `Config.h` (pins listed in §3 are omitted here).
 | `ATTACK_SPEED_CLOSE_PCT` | 100 | Push speed at/below `ATTACK_CLOSE_DIST_MM` | 40–100 |
 | `ATTACK_SPEED_FAR_PCT` | 60 | Push speed at/above `ATTACK_FAR_DIST_MM` | 30–100 |
 | `ATTACK_CLOSE_DIST_MM` / `ATTACK_FAR_DIST_MM` | 150 / 400 | Speed ramp endpoints | 50–800 |
+| `PUSH_CONTACT_DIST_MM` / `PUSH_CONTACT_SPEED_PCT` | 30 / 100 | MIDDLE ToF contact distance, and the flat speed used there (both wheels, no steering trim) | 10–80 / 60–100 |
 | `ATTACK_STEER_GAIN_PCT` | 70 | Max differential at bearing ±100 (% of base) — higher turns onto the opponent harder | 10–100 |
 | `SEARCH_SPEED_PCT` | 45 | Base speed of all search patterns | 20–80 |
 | `FLANK_TURN_SPEED_PCT` / `FLANK_TURN_MIN_PCT` | 80 / 35 | Pivot speed at \|bearing\| = 100 and at the FLANK entry threshold (linear between; inner wheel counterspins at half) | 30–100 / 20–80 |
@@ -258,7 +260,7 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
   1. `TARGET_MEMORY_MS` / `TARGET_MEMORY_MAX_PCT` — how long the direction the opponent was last seen in keeps steering, and how hard. Raise them if the robot still swings the wrong way when a second sensor joins; lower `TARGET_MEMORY_MAX_PCT` if it feels slow to react to an opponent that has genuinely moved.
   2. `FLANK_TURN_MIN_PCT` / `FLANK_TURN_SPEED_PCT` — the pivot speed at the entry threshold and at \|bearing\| = 100. If it still overshoots on small corrections, lower `FLANK_TURN_MIN_PCT`; if it turns onto a far target too slowly, raise `FLANK_TURN_SPEED_PCT`.
   3. `TARGET_ON_AXIS_BAND` / `TARGET_FLANK_BAND` — the ATTACK/FLANK dead zone. Narrow it if the robot should commit to pushing sooner; widen it if it still flips between pushing and pivoting.
-- Read the debug table: `Bearing=12 (raw 30)` shows what the robot steers on vs the live reading — a large gap means the memory is doing the work. `State=EVADE (FLEE)`/`(TURN)` shows the evade phase.
+- Read the debug table: `Bearing=12 (raw 30)` shows what the robot steers on vs the live reading — a large gap means the memory is doing the work. `Contact=1` means the middle sensor is inside `PUSH_CONTACT_DIST_MM`, i.e. the robot is in a shoving contest at full power. `State=EVADE (FLEE)`/`(TURN)` shows the evade phase.
 
 **Opening timings**
 - Each 100 % pivot step ≈ how many ms = 90° on YOUR robot must be measured (`s1`/`s2` use 120 ms as a first guess). Film a run at 120 fps or mark-and-count turns; adjust the step durations in `Strategies.h`.

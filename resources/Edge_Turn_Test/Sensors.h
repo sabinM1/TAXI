@@ -229,6 +229,16 @@ int8_t sensorsOpponent() {
   return (int8_t)constrain(b, -100, 100);
 }
 
+/**
+ * Blade-to-blade contact: the MIDDLE ToF sensor (id 3, straight ahead) reading
+ * PUSH_CONTACT_DIST_MM or closer. Only the middle sensor is used on purpose —
+ * the outer front sensors can see the opponent's corner from well off to the side,
+ * and "contact" must mean the opponent is actually in front of the blade.
+ */
+bool sensorsContact() {
+  return tofValid[2] && tofMm[2] <= PUSH_CONTACT_DIST_MM;
+}
+
 /** Smallest currently-valid ToF distance in mm; ok=false when none. */
 uint16_t sensorsClosestMm(bool* ok) {
   uint16_t best = 0xFFFF;

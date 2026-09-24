@@ -148,6 +148,15 @@
 #define ATTACK_SPEED_FAR_PCT    60
 #define ATTACK_CLOSE_DIST_MM    150   // <= this: full push
 #define ATTACK_FAR_DIST_MM      400   // >= this: cautious push
+
+// Blade-to-blade contact. The MIDDLE ToF (id 3, looking straight ahead) reading
+// this close means the opponent is on the blade. From there both wheels go to
+// PUSH_CONTACT_SPEED_PCT straight ahead and the steering trim is skipped: a
+// pushing contest is won by whoever still has both wheels driving, and at that
+// range a correction would only give one of them away. It also outranks the
+// switch to FLANK — contact is worth more than re-centering first.
+#define PUSH_CONTACT_DIST_MM     30   // MIDDLE sensor distance that means contact
+#define PUSH_CONTACT_SPEED_PCT  100   // both wheels, no differential
 #define ATTACK_STEER_GAIN_PCT   70    // % of base speed applied as full
                                       // differential at bearing = +/-100.
                                       // Higher = steers onto the opponent harder
