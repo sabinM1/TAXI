@@ -35,6 +35,10 @@ bool     tofValid[TOF_SENSOR_COUNT];
 // Bearing weights (left negative, right positive) matching the layout above.
 static const int8_t TOF_WEIGHT[TOF_SENSOR_COUNT] = { 4, 2, 0, -2, -4 };
 
+// The three FRONT sensors (ids 2, 3, 4) are indices 1..3. Only these are polled
+// in attack-scan mode; everything else uses the full round-robin.
+static inline bool tofIsFrontIndex(uint8_t i) { return i >= 1 && i <= 3; }
+
 static SingleWireSerial tofBus(false);           // bus on D4 (Config: PIN_TOF_BUS)
 static DistanceSensor tofSensors[TOF_SENSOR_COUNT] = {
   DistanceSensor(&tofBus, 1), DistanceSensor(&tofBus, 2),
@@ -61,9 +65,26 @@ uint8_t sensorsHealthyCount() {
 /**
  * Switch the ToF poll pattern. In attack mode only the three front sensors
  * (ids 2, 3, 4) are cycled -> ~3x faster updates on the sensors that decide
- * the fight; the side readings go stale, which is fine while pushing.
+ * the fight.
+ *
+ * Entering attack scan also INVALIDATES the two side readings. They are the
+ * last values measured before the switch, and because sensorsOpponent()
+ * weights every reading by inverse distance, one close side reading taken a
+ * moment earlier would keep outvoting all three front sensors — dragging the
+ * bearing off-centre and pushing ATTACK into a FLANK pivot against data that is
+ * no longer being sampled. A reading nobody is refreshing must not steer.
+ *
+ * They become valid again on their next real poll (the round-robin refreshes
+ * all five within ~5 loops ≈ 10 ms), and their health counters are untouched,
+ * so the degraded-mode check is unaffected.
  */
-void sensorsSetAttackScan(bool on) { tofAttackScan = on; }
+void sensorsSetAttackScan(bool on) {
+  if (on == tofAttackScan) return;            // only act on the transition
+  tofAttackScan = on;
+  if (!on) return;
+  for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++)
+    if (!tofIsFrontIndex(i)) tofValid[i] = false;
+}
 
 // --------------------------------------------------------------- Line -------
 // Three QRE1113 modules. Raw ADC in lineRaw[]; latched edge flags below.
@@ -82,7 +103,8 @@ static uint8_t lineEdgeCount[3];                              // white-hit debou
 void sensorsInit() {
   pinMode(PIN_TOF_BUS, INPUT);          // release SIG; pull-up holds idle high
   tofBus.begin(TOF_BUS_BAUD);
-  tofBus.setTimeout(2);                 // 2 ms: ~4x a full reply @115200
+  tofBus.setTimeout(TOF_TIMEOUT_MS);    // must exceed the sensors' sampling budget
+                                        // (reg 0xB0 = 12 ms on this robot, see Config.h)
   pinMode(PIN_TRIMPOT, INPUT);
   lineSensL.begin();
   lineSensR.begin();
@@ -114,11 +136,11 @@ static void tofReadOne() {
 
   bool ok; uint16_t mm;
   if (s.mDeviceIndex == 3) {
-    uint16_t raw = s.readDistance_mm();     // 0xFFF sentinel = no response
+    uint16_t raw = s.readDistance_mm();
     ok = (raw != TOF_INVALID_MM && raw >= TOF_MIN_VALID_MM && raw <= TOF_MAX_VALID_MM);
     mm = raw;
   } else {
-    uint16_t raw = s.readDistance_cm();     // 0xFF sentinel = no response
+    uint16_t raw = s.readDistance_cm();
     mm = (uint16_t)raw * 10;
     ok = (raw != TOF_INVALID_CM && mm >= TOF_MIN_VALID_MM && mm <= TOF_MAX_VALID_MM);
   }

@@ -56,7 +56,7 @@
 #define RING_LED_COUNT   7       // 1 center + 6 outer
 
 
-#define RING_DEFAULT_BRIGHTNESS 128   // 0..255, non-destructive
+#define RING_DEFAULT_BRIGHTNESS 96    // 0..255, non-destructive (128 * 75%)
 
 // Distance thresholds (cm). Raw sensor values are converted to cm internally.
 //

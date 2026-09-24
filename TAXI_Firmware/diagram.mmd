@@ -1,8 +1,8 @@
 stateDiagram-v2
-  IDLE --> TACTIC: start LOW (50ms debounce)
+  IDLE --> TACTIC: start signal HIGH (raw read)
   TACTIC --> SEARCH: opening done
-  SEARCH --> ATTACK: opponent front
-  SEARCH --> FLANK: opponent on side
+  SEARCH --> ATTACK: opponent front (|bearing| <= 15)
+  SEARCH --> FLANK: opponent on side (|bearing| > 15)
   ATTACK --> FLANK: opponent slid off center
   FLANK --> ATTACK: re-centered
   ATTACK --> SEARCH: lost >400ms
@@ -17,3 +17,8 @@ stateDiagram-v2
   SEARCH --> STOP
   ATTACK --> STOP
   FLANK --> STOP
+  note right of STOP
+    Highest priority: checked before every
+    other rule, on every loop. Terminal --
+    only a power cycle leaves this state.
+  end note

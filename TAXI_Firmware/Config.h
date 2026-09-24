@@ -24,7 +24,13 @@
 // ============================================================================
 
 // Motor driver (XMotion V3 board labels: MOT1 = left, MOT2 = right).
-#define PIN_LM_PWM   3      // left motor PWM  (MOT1)
+// Verified against the official XMotionV3-library: LM_PWM = D10, NOT D3.
+// D3 is not wired to the left driver channel on this board.
+//
+// D10/PB6 is multiplexed as OC1B (Timer1) AND OC4B (Timer4). It is driven from
+// Timer4 on purpose: the ToF bus (D4) needs SingleWireSerial, which claims
+// Timer1 on the 32U4, and that makes analogWrite()/OC1B dead. See Motor.h.
+#define PIN_LM_PWM   10     // left motor PWM  (MOT1, Timer4 OC4B), do not change
 #define PIN_LM_DIR   12     // left motor direction
 #define PIN_RM_PWM   11     // right motor PWM (MOT2)
 #define PIN_RM_DIR   13     // right motor direction
@@ -32,8 +38,10 @@
 #define PIN_TOF_BUS  4      // M60F shared half-duplex bus (SIG lines tied here,
                             // 4.7k pull-up to 5V on the harness)
 #define PIN_RING     A2     // WS2812 7-LED ring data-in (through ~330R)
-#define PIN_START    A0     // Start/Stop module signal (HIGH = fight, see
-                            // NanoLabs docs; must read LOW at power-up)
+#define PIN_START    A0     // Start/Stop module signal. HIGH = fight, LOW =
+                            // armed/stopped (NanoLabs docs). Read raw, every
+                            // loop, with no debounce/filter — see
+                            // StateMachine.h. Must read LOW at power-up.
 #define PIN_LINE_L   A5     // QRE1113 line sensor, LEFT
 #define PIN_LINE_R   A1     // QRE1113 line sensor, RIGHT
 #define PIN_LINE_B   A4     // QRE1113 line sensor, REAR
@@ -67,6 +75,13 @@
 
 #define TOF_SENSOR_COUNT   5        // sensors on the shared bus
 #define TOF_BUS_BAUD       115200   // must match sensor register 0xB0
+// Per-read timeout for the M60F bus. The read returns the last stored value
+// almost instantly (~0.75 ms measured), but under ACTIVE ranging the sensor
+// MCU can be busy measuring for its full sampling/timing budget (reg 0xB0,
+// currently 12 ms on this robot), delaying a read that lands mid-measurement.
+// This must stay above that budget + margin or a late reply leaks into the
+// next sensor's read (the old "shifted by one" bug). 15 = 12 ms budget + margin.
+#define TOF_TIMEOUT_MS     15
 #define MONITOR_BAUD       115200   // USB Serial debug baud
 
 // Valid measurement window (sensor config: 9..800 mm). Anything outside
@@ -93,12 +108,12 @@
 //
 // Debug print order (lineRaw[0..2]): 0 = LEFT, 1 = REAR, 2 = RIGHT.
 // Calibration (verified on the robot, raw ADC 0-1023):
-#define LINE_LEFT_WHITE_THRESHOLD   460   // LEFT  (A5) raw BELOW this = white border
-#define LINE_LEFT_BLACK_THRESHOLD   920   // LEFT  (A5) raw ABOVE this = black interior
-#define LINE_REAR_WHITE_THRESHOLD   850   // REAR  (A4) raw BELOW this = white border
-#define LINE_REAR_BLACK_THRESHOLD   960   // REAR  (A4) raw ABOVE this = black interior
-#define LINE_RIGHT_WHITE_THRESHOLD  460   // RIGHT (A1) raw BELOW this = white border
-#define LINE_RIGHT_BLACK_THRESHOLD  920   // RIGHT (A1) raw ABOVE this = black interior
+#define LINE_LEFT_WHITE_THRESHOLD   400   // LEFT  (A5) raw BELOW this = white border
+#define LINE_LEFT_BLACK_THRESHOLD   800   // LEFT  (A5) raw ABOVE this = black interior
+#define LINE_REAR_WHITE_THRESHOLD   765   // REAR  (A4) raw BELOW this = white border
+#define LINE_REAR_BLACK_THRESHOLD   820   // REAR  (A4) raw ABOVE this = black interior
+#define LINE_RIGHT_WHITE_THRESHOLD  400   // RIGHT (A1) raw BELOW this = white border
+#define LINE_RIGHT_BLACK_THRESHOLD  800   // RIGHT (A1) raw ABOVE this = black interior
 #define LINE_DEBOUNCE_SAMPLES       2     // consecutive white reads to confirm edge
 
 // ============================================================================
@@ -106,16 +121,21 @@
 // ============================================================================
 
 #define SERIAL_DEBUG      true   // boot/strategy messages (cheap, few lines)
-// Full telemetry mode: state transitions + a 200 ms status dump with
-// sensors, bearing, motors, edge flags. Disable for matches (Serial costs
-// loop time on the 32u4).
+// Full telemetry mode: state transitions + a 400 ms status table with sensors,
+// bearing, motors, edge flags and loop timing. Also the switch that keeps the
+// ring telemetry alive during a fight, and the one that arms the watchdog.
+// Disable for matches: the serial table blocks the loop for ~50 ms per dump
+// (USB CDC at 115200), which is wasted time and skews sensor freshness.
 #define DEBUG_VERBOSE     true
 #define SEARCH_PATTERN_TIMEOUT_MS  3000   // no opponent for this long in
                                             // SEARCH -> flip search direction
 #define ATTACK_TARGET_LOST_MS      400    // target invisible this long in
                                             // ATTACK/FLANK -> back to SEARCH
-#define START_SIGNAL_DEBOUNCE_MS   50     // start module chatter filter
-                                            // (NanoLabs latches state internally)
+// NOTE: the Start/Stop module deliberately has NO debounce constant here.
+// Its output is a latched, clean logic level (the NanoLabs module stores its
+// state in non-volatile memory), so StateMachine.h reads the pin directly and
+// reacts on the same loop. Never add filtering to that path: it would only
+// delay the referee's kill command.
 
 // ============================================================================
 // COMBAT SPEEDS
@@ -153,11 +173,36 @@
 // ============================================================================
 // EVADE TIMING
 // ============================================================================
+//
+// One evade program is FLEE -> TURN -> hand over to SEARCH. Both phases are
+// timed, so the same edge always produces the same escape. See evadeUpdate().
 
-#define EVADE_ESCAPE_MIN_MS   60    // mandatory blind escape burst — the robot
-                                    // may still be rolling off the dohyo even
-                                    // if the edge briefly stops reading
-#define EVADE_TOTAL_MAX_MS    400   // max time in EVADE before giving control
-                                    // back to SEARCH
+#define EVADE_ESCAPE_MIN_MS   15    // FLEE floor: the mandatory blind burst.
+                                    // Short on purpose — it only exists so one
+                                    // flickering sample cannot end the flee. The
+                                    // moment the sensors read black the phase ends
+                                    // anyway, so a small floor means the robot
+                                    // turns as soon as it is actually clear.
+                                    // Tuned on the robot with Edge_Turn_Test.
+#define EVADE_FLEE_MAX_MS     300   // FLEE ceiling: once this long has passed
+                                    // with a sensor STILL reading white, stop
+                                    // fleeing anyway — that run cannot be
+                                    // measured, and pivoting over white would be
+                                    // pivoting along the edge.
+#define EVADE_TURN_MS         80    // *** OVERSHOOT KNOB *** duration of the
+                                    // pivot away from the edge. Tuned on the
+                                    // robot with resources/Edge_Turn_Test
+                                    // (see its GUIDE).
+// Pivot speeds used by the TURN phase (evadeTurnAway()). These set the pivot
+// RATE; together with EVADE_TURN_MS they set how far the robot rotates.
+#define EVADE_TURN_OUTER_PCT   70   // outer wheel, forward
+#define EVADE_TURN_INNER_PCT   50   // inner wheel, applied reversed
+#define EVADE_TURN_SPIN_PCT    60   // both wheels, when the REAR edge tripped
+                                    // (spin in place instead of an arc)
+// Safety net for one whole evade program — NOT a tuning knob, and deliberately
+// generous. It only fires if FLEE and TURN keep re-arming each other, which
+// needs a line sensor stuck reading white (dead or disconnected). The escape
+// duration itself is set by the two phase constants above.
+#define EVADE_TOTAL_MAX_MS    800
 
 #endif // CONFIG_H
