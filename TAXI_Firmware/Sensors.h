@@ -205,11 +205,21 @@ int8_t sensorsEdgeIndex() {
  * +100 = hard right, 127 = nothing visible. Weighted vote where each valid
  * sensor contributes its geometric weight scaled by inverse distance —
  * close reflections dominate, far/uncertain ones barely count.
+ *
+ * The three FRONT sensors outrank the two side ones: as soon as any of the front
+ * trio has a reading, the sides are ignored. Their geometric weight is the
+ * largest (+/-4), so a single close side reflection — the opponent's blade edge,
+ * a wall, a hand — would otherwise outvote the sensors that are actually looking
+ * at the target and throw the heading off. The sides still decide on their own
+ * when nothing in front can see anything, which is exactly the "opponent is beside
+ * me" case FLANK exists for.
  */
 int8_t sensorsOpponent() {
+  bool frontSeen = tofValid[1] || tofValid[2] || tofValid[3];
   int32_t wsum = 0, wtot = 0;
   for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++) {
     if (!tofValid[i]) continue;
+    if (frontSeen && !tofIsFrontIndex(i)) continue;
     int32_t w = (int32_t)TOF_MAX_VALID_MM + 1 - tofMm[i];   // near -> heavy
     wsum += (int32_t)TOF_WEIGHT[i] * 25 * w;
     wtot += w;

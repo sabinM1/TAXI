@@ -120,8 +120,8 @@ loop():  sensorsUpdate()      // 1 ToF read + 1 line pass — ALL serial I/O
 | `ST_IDLE` | Motors stopped; waits for start signal HIGH (read raw each loop) |
 | `ST_TACTIC` | Plays the DIP-selected opening timed-step sequence, then → SEARCH |
 | `ST_SEARCH` | Spin/arc/sweep pattern; flips direction every 3 s if blind; on sight picks ATTACK (\|bearing\| ≤ `TARGET_ON_AXIS_BAND`) or FLANK |
-| `ST_ATTACK` | Target ahead: distance-proportional push + smooth proportional steering; front-only ToF scan |
-| `ST_FLANK` | Target off to a side (\|bearing\| > `TARGET_ON_AXIS_BAND`): bang-bang pivot at fixed speed until re-centered, then → ATTACK |
+| `ST_ATTACK` | Target ahead (\|bearing\| ≤ `TARGET_FLANK_BAND` while in it): distance-proportional push + proportional steering; front-only ToF scan |
+| `ST_FLANK` | Target off-axis (\|bearing\| > `TARGET_FLANK_BAND`): pivot proportional to the bearing, returns to ATTACK below `TARGET_ON_AXIS_BAND` |
 | `ST_EVADE` | Edge override, two timed phases: FLEE (≥15 ms blind, keeps fleeing while any sensor reads white, ≤300 ms; rear edge drives **forward**) → TURN (fixed 80 ms pivot away from the edge) → SEARCH |
 | `ST_STOP` | Start signal lost → motors off, latched until power cycle |
 
@@ -132,7 +132,8 @@ loop():  sensorsUpdate()      // 1 ToF read + 1 line pass — ALL serial I/O
 | `Motor.h` | `motorsSet(l, r)` | Signed-percent drive, applies bench cap + left-motor inversion |
 | | `motorsStop()` | Coast both motors |
 | `Sensors.h` | `sensorsUpdate()` | One ToF poll + one line pass per loop |
-| | `sensorsOpponent()` | Bearing −100..+100 (127 = nothing), inverse-distance weighted |
+| | `sensorsOpponent()` | Bearing −100..+100 (127 = nothing), inverse-distance weighted; the front trio outranks the side sensors |
+| `StateMachine.h` | `targetBearing()` | The bearing actually steered on: live reading blended with the fading bearing memory |
 | | `sensorsClosestMm()` | Nearest valid distance |
 | | `sensorsAnyEdge()` / `sensorsEdgeIndex()` | Debounced edge flags, priority rear>left>right |
 | | `sensorsHealthyCount()` | Live sensors (health counters) |
@@ -168,8 +169,9 @@ All in `Config.h` (pins listed in §3 are omitted here).
 | `ATTACK_CLOSE_DIST_MM` / `ATTACK_FAR_DIST_MM` | 150 / 400 | Speed ramp endpoints | 50–800 |
 | `ATTACK_STEER_GAIN_PCT` | 70 | Max differential at bearing ±100 (% of base) — higher turns onto the opponent harder | 10–100 |
 | `SEARCH_SPEED_PCT` | 45 | Base speed of all search patterns | 20–80 |
-| `FLANK_TURN_SPEED_PCT` | 80 | Pivot speed while re-centering (inner wheel counterspins at half) | 30–100 |
-| `TARGET_ON_AXIS_BAND` | 15 | Bearing band treated as "dead ahead" (ATTACK); wider goes to FLANK | 5–40 |
+| `FLANK_TURN_SPEED_PCT` / `FLANK_TURN_MIN_PCT` | 80 / 35 | Pivot speed at \|bearing\| = 100 and at the FLANK entry threshold (linear between; inner wheel counterspins at half) | 30–100 / 20–80 |
+| `TARGET_ON_AXIS_BAND` / `TARGET_FLANK_BAND` | 15 / 22 | Bearing thresholds: enter FLANK above 22, return to ATTACK below 15 (dead zone = hysteresis) | 5–40 |
+| `TARGET_MEMORY_MS` / `TARGET_MEMORY_MAX_PCT` / `TARGET_MEMORY_NEAR_MM` | 250 / 70 / 250 | Bearing memory: how long a sighting keeps steering, its weight at t=0, and the distance at which a sighting is full strength | 100–600 / 30–90 / 100–400 |
 | `EVADE_REVERSE_SPEED_PCT` | −80 | FLEE speed for front edges (negative = reverse) | −100..−50 |
 | `TOF_HEALTH_MAX` | 8 | Per-sensor health counter ceiling | — |
 | `TOF_MIN_HEALTHY_SENSORS` | 3 | Below this → degraded blind spin-search | 1–5 |
@@ -250,6 +252,13 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
 **Speeds**
 - No master knob: every speed is an absolute `*_PCT` constant in `Config.h` (§7). If a speed is wrong for the venue, change the constant and re-flash.
 - Indoor testing: set `MOTOR_BENCH_LIMIT_ENABLED` to `true` (default is `false`, i.e. full match power) — that clamps every motor command, evade and openings included.
+
+**Target tracking (combat turning)**
+- Three knobs, in order of effect:
+  1. `TARGET_MEMORY_MS` / `TARGET_MEMORY_MAX_PCT` — how long the direction the opponent was last seen in keeps steering, and how hard. Raise them if the robot still swings the wrong way when a second sensor joins; lower `TARGET_MEMORY_MAX_PCT` if it feels slow to react to an opponent that has genuinely moved.
+  2. `FLANK_TURN_MIN_PCT` / `FLANK_TURN_SPEED_PCT` — the pivot speed at the entry threshold and at \|bearing\| = 100. If it still overshoots on small corrections, lower `FLANK_TURN_MIN_PCT`; if it turns onto a far target too slowly, raise `FLANK_TURN_SPEED_PCT`.
+  3. `TARGET_ON_AXIS_BAND` / `TARGET_FLANK_BAND` — the ATTACK/FLANK dead zone. Narrow it if the robot should commit to pushing sooner; widen it if it still flips between pushing and pivoting.
+- Read the debug table: `Bearing=12 (raw 30)` shows what the robot steers on vs the live reading — a large gap means the memory is doing the work. `State=EVADE (FLEE)`/`(TURN)` shows the evade phase.
 
 **Opening timings**
 - Each 100 % pivot step ≈ how many ms = 90° on YOUR robot must be measured (`s1`/`s2` use 120 ms as a first guess). Film a run at 120 fps or mark-and-count turns; adjust the step durations in `Strategies.h`.

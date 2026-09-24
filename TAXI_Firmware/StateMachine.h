@@ -104,6 +104,69 @@ static void startModuleUpdate() {
   startSignal = digitalRead(PIN_START);
 }
 
+// ---------------- target bearing: live reading + short memory ---------------
+
+static int8_t   memBearing  = 0;    // direction the opponent was last seen in
+static uint8_t  memStrength = 0;    // how strong that sighting was (0..100)
+static uint32_t memStamp    = 0;    // when it was taken
+
+/**
+ * How much a sighting taken `age` ms ago still biases the bearing, in percent.
+ * Linear fade to zero across TARGET_MEMORY_MS.
+ */
+static uint8_t targetMemoryWeight(uint32_t age) {
+  if (age >= TARGET_MEMORY_MS) return 0;
+  uint32_t v = (uint32_t)memStrength * (TARGET_MEMORY_MS - age) / TARGET_MEMORY_MS;
+  return (uint8_t)(v * TARGET_MEMORY_MAX_PCT / 100);
+}
+
+/**
+ * The bearing the robot actually steers on.
+ *
+ * The live reading from sensorsOpponent(), blended towards the direction the
+ * opponent was last seen in by a weight that fades out over TARGET_MEMORY_MS.
+ * This is what stops a single frame from reversing the turn: a reading that
+ * contradicts the remembered direction only gets the remaining say, so the robot
+ * finishes the correction it started and re-orients after the memory expires.
+ *
+ * 127 ("nothing visible") is passed straight through — the memory must never
+ * fake a target, or target acquisition and the lost-target timeout break.
+ *
+ * Refresh rule: the memory is retaken from the live reading when it does not
+ * contradict what is stored (same side of centre) and is at least as confident.
+ * A sudden opposite reading therefore does NOT overwrite the memory — if it did,
+ * there would be nothing left to damp the turn with.
+ */
+static int8_t targetBearing() {
+  int8_t raw = sensorsOpponent();
+  if (raw == 127) return 127;
+
+  bool ok; uint16_t mm = sensorsClosestMm(&ok);
+
+  // Confidence 0..100: how close the opponent was seen. Full at
+  // TARGET_MEMORY_NEAR_MM, nothing at ATTACK_FAR_DIST_MM.
+  uint8_t conf = 0;
+  if (ok && mm <= TARGET_MEMORY_NEAR_MM) {
+    conf = 100;
+  } else if (ok && mm < ATTACK_FAR_DIST_MM) {
+    conf = 100 - (uint8_t)((uint32_t)(mm - TARGET_MEMORY_NEAR_MM) * 100 /
+                           (ATTACK_FAR_DIST_MM - TARGET_MEMORY_NEAR_MM));
+  }
+
+  uint8_t w = targetMemoryWeight(millis() - memStamp);
+  bool agrees = (raw >= 0 && memBearing >= 0) || (raw <= 0 && memBearing <= 0);
+
+  if (w == 0 || (agrees && conf >= memStrength)) {
+    memBearing  = raw;
+    memStrength = conf;
+    memStamp    = millis();
+    return raw;                     // nothing to damp: steer on the live reading
+  }
+
+  return (int8_t)constrain((int32_t)raw * (100 - w) / 100 +
+                           (int32_t)memBearing * w / 100, -100, 100);
+}
+
 // ------------------------- state helpers ------------------------------------
 
 /**
@@ -159,7 +222,7 @@ static int attackBaseSpeed(uint16_t mm, bool ok) {
  * Stamps lastSeenMs so the caller's lost-target timeout stays armed.
  */
 static void attackUpdate() {
-  int8_t bearing = sensorsOpponent();
+  int8_t bearing = targetBearing();
   bool ok; uint16_t mm = sensorsClosestMm(&ok);
   lastSeenMs = millis();
 
@@ -173,26 +236,31 @@ static void attackUpdate() {
 
 /**
  * Re-centering pivot. Used while the opponent is off-axis
- * (|bearing| > TARGET_ON_AXIS_BAND), i.e. it is only on a side ToF sensor.
- * Bang-bang: one wheel forward at FLANK_TURN_SPEED_PCT, the other reversed at
- * half that, until the bearing re-enters the band (the caller then switches to
- * ST_ATTACK). 127 means lost — do nothing and let the caller's timeout drop us
- * back to SEARCH. Unlike ATTACK this never pushes blind: a pivot in the wrong
- * direction is worse than standing still.
+ * (|bearing| > TARGET_FLANK_BAND), i.e. only a side or outer front sensor has it.
+ *
+ * The pivot speed scales with how far off-axis the target is: a nudge at the
+ * entry threshold, a full FLANK_TURN_SPEED_PCT at |bearing| = 100, the inner wheel
+ * counterspinning at half of that. Bang-bang (one speed for every bearing) is why
+ * a target barely outside the band got the same full-scale pivot as one 90 degrees
+ * off, which overshot and then lost it.
+ *
+ * 127 means lost — do nothing and let the caller's timeout drop us back to SEARCH.
+ * Unlike ATTACK this never pushes blind: a pivot in the wrong direction is worse
+ * than standing still.
  */
 static void flankUpdate() {
-  // Opponent on a side sensor: turn toward it until it is in front.
-  int8_t bearing = sensorsOpponent();
+  int8_t bearing = targetBearing();
   if (bearing == 127) return;
   lastSeenMs = millis();
 
-  if (bearing >= -15 && bearing <= 15) {
-    motorsSet(FLANK_TURN_SPEED_PCT, FLANK_TURN_SPEED_PCT);   // lined up: push
-  } else if (bearing > 0) {
-    motorsSet(FLANK_TURN_SPEED_PCT, -FLANK_TURN_SPEED_PCT / 2);
-  } else {
-    motorsSet(-FLANK_TURN_SPEED_PCT / 2, FLANK_TURN_SPEED_PCT);
-  }
+  uint8_t mag = (uint8_t)abs((int)bearing);          // 1..100
+  uint8_t outer = (uint8_t)constrain(map((long)mag, TARGET_ON_AXIS_BAND, 100,
+                                         FLANK_TURN_MIN_PCT, FLANK_TURN_SPEED_PCT),
+                                     FLANK_TURN_MIN_PCT, FLANK_TURN_SPEED_PCT);
+  uint8_t inner = outer / 2;                         // counterspin, as before
+
+  if (bearing > 0) motorsSet(outer, -inner);
+  else             motorsSet(-inner, outer);
 }
 
 /**
@@ -361,8 +429,11 @@ void stateMachineUpdate() {
   // Degraded fallback: too many ToF dead -> stay in safe spin-search.
   bool degraded = sensorsHealthyCount() < TOF_MIN_HEALTHY_SENSORS;
 
-  // ToF front-priority scan only while pushing a target.
-  sensorsSetAttackScan(state == ST_ATTACK || state == ST_FLANK);
+  // ToF front-priority scan only while pushing. FLANK deliberately keeps the
+  // full round-robin: it exists to chase a target that is off to the side, so it
+  // needs the side sensors live — capping it to the front trio would leave it
+  // blind to the very reading that sent it there.
+  sensorsSetAttackScan(state == ST_ATTACK);
 
   switch (state) {
     case ST_IDLE:
@@ -385,7 +456,7 @@ void stateMachineUpdate() {
         motorsSet(SEARCH_SPEED_PCT, -SEARCH_SPEED_PCT);
         break;
       }
-      int8_t bearing = sensorsOpponent();
+      int8_t bearing = targetBearing();
       if (bearing != 127) {
         lastSeenMs = millis();
         gotoState((bearing >= -TARGET_ON_AXIS_BAND && bearing <= TARGET_ON_AXIS_BAND)
@@ -397,7 +468,7 @@ void stateMachineUpdate() {
     }
 
     case ST_ATTACK: {
-      int8_t bearing = degraded ? 127 : sensorsOpponent();
+      int8_t bearing = degraded ? 127 : targetBearing();
       if (bearing == 127) {
         if (millis() - lastSeenMs > ATTACK_TARGET_LOST_MS) {
           gotoState(ST_SEARCH); searchModeStart = millis();
@@ -407,8 +478,11 @@ void stateMachineUpdate() {
           int push = degraded ? 40 : attackBaseSpeed(0xFFFF, false);
           motorsSet(push, push);
         }
-      } else if (bearing < -TARGET_ON_AXIS_BAND || bearing > TARGET_ON_AXIS_BAND) {
-        gotoState(ST_FLANK);        // opponent slid off center
+      } else if (bearing < -TARGET_FLANK_BAND || bearing > TARGET_FLANK_BAND) {
+        // Off by more than the outer threshold: pivot to re-center. Anything
+        // inside TARGET_FLANK_BAND stays in ATTACK (that dead zone is the
+        // hysteresis against FLANK).
+        gotoState(ST_FLANK);
       } else {
         attackUpdate();
       }
@@ -417,7 +491,7 @@ void stateMachineUpdate() {
 
     case ST_FLANK: {
       if (degraded) { gotoState(ST_SEARCH); searchModeStart = millis(); break; }
-      int8_t bearing = sensorsOpponent();
+      int8_t bearing = targetBearing();
       if (bearing == 127) {
         if (millis() - lastSeenMs > ATTACK_TARGET_LOST_MS) {
           gotoState(ST_SEARCH); searchModeStart = millis();

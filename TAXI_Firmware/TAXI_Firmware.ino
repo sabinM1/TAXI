@@ -89,11 +89,14 @@ static void ringStatusUpdate() {
 
   if (!RingIsEnabled()) RingEnable();
 
-  // Match over -> solid white, once (LEDs latch their state).
+  // Match over -> solid white at HALF level, once (LEDs latch their state).
+  // 128 instead of White(255): the global FastLED brightness (RING_DEFAULT_BRIGHTNESS,
+  // 96) still applies on top of the pixel value, so this reads as half as bright as
+  // a normal full-white frame.
   if (st == ST_STOP) {
     static bool stopLit = false;
     if (stopLit) return;
-    RingFill(CRGB::White);
+    RingFill(CRGB(128, 128, 128));
     RingShow();
     stopLit = true;
     return;
@@ -162,7 +165,8 @@ static void debugDump() {
   }
   Serial.print(F("   Strategy=")); Serial.print(strategyIndex);
   Serial.print(F("  Start=")); Serial.println(digitalRead(PIN_START));
-  Serial.print(F(" Bearing=")); Serial.print(sensorsOpponent());
+  Serial.print(F(" Bearing=")); Serial.print(targetBearing());
+  Serial.print(F(" (raw ")); Serial.print(sensorsOpponent()); Serial.print(')');
   Serial.print(F("   Closest=")); if (ok) Serial.print(mm); else Serial.print(F("---"));
   Serial.print(F("mm  Health=")); Serial.print(sensorsHealthyCount());
   Serial.print('/'); Serial.print(TOF_SENSOR_COUNT); Serial.println();

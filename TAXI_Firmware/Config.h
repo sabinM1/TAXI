@@ -153,18 +153,38 @@
                                       // Higher = steers onto the opponent harder
                                       // while pushing (more aggressive tracking).
 
-// Target "dead ahead" band, in bearing units (scale of sensorsOpponent():
-// -100 hard left, 0 dead ahead, +100 hard right).
-//   |bearing| <= this  -> ATTACK: keep pushing, steer with the gain above
-//   anything wider     -> FLANK: pivot on the spot to re-center first
-// Narrower band = the robot stops to pivot sooner (turns harder, advances less);
-// wider = it keeps committing forward and tracks with the differential only.
-#define TARGET_ON_AXIS_BAND     15
+// ----- which way the robot thinks the opponent is ---------------------------
+// Bearing units, the scale of sensorsOpponent(): -100 hard left, 0 dead ahead,
+// +100 hard right.
+//
+// ATTACK (push, steering with the gain above) and FLANK (pivot to re-center) are
+// separated by TWO thresholds, not one. With a single threshold the command
+// jumped from "a ~10% differential" to "a full pivot" the moment the bearing
+// crossed it, so one extra sensor lighting up was enough to spin the robot over a
+// target that was nearly straight ahead. The dead zone between the two numbers
+// removes that cliff and stops the two states chattering.
+#define TARGET_ON_AXIS_BAND     15   // |bearing| <= this -> ATTACK
+#define TARGET_FLANK_BAND       22   // |bearing| >  this -> FLANK
+                                     // in between: stay in the state we are in
+
+// Bearing memory: a sighting keeps steering the robot for TARGET_MEMORY_MS,
+// faded out linearly, so a momentary reading in the opposite direction cannot
+// reverse a correction mid-turn — the robot finishes the turn it started and only
+// re-orients once the memory has expired. The CLOSER the sighting, the stronger
+// the memory: full at TARGET_MEMORY_NEAR_MM, nothing at ATTACK_FAR_DIST_MM.
+#define TARGET_MEMORY_MS       250   // how long a sighting keeps steering
+#define TARGET_MEMORY_MAX_PCT   70   // its weight on the bearing at t = 0
+#define TARGET_MEMORY_NEAR_MM  250   // sighting at/below this = full strength
 
 #define SEARCH_SPEED_PCT        45    // base speed of all search patterns
-#define FLANK_TURN_SPEED_PCT    80    // pivot speed while re-centering a target
-                                      // (inner wheel counterspins at half this),
-                                      // raised for a faster turn onto the target
+#define FLANK_TURN_SPEED_PCT    80    // pivot speed at |bearing| = 100 (inner
+                                      // wheel counterspins at half this)
+#define FLANK_TURN_MIN_PCT      35    // pivot speed at the FLANK entry threshold,
+                                      // scaled linearly up to FLANK_TURN_SPEED_PCT
+                                      // above it: full power for a big correction,
+                                      // a nudge for a small one. One value for both
+                                      // meant every entry pivoted flat out and
+                                      // overshot the target
 #define EVADE_REVERSE_SPEED_PCT -80   // escape burst away from an edge
 
 // ============================================================================
