@@ -7,8 +7,8 @@
  *   Pins:      LEFT = A5, REAR = A4, RIGHT = A1   (Config.h)
  *   Logic:     black interior = HIGH, white border = LOW
  *              EDGE = raw BELOW the white threshold (Schmitt + debounce).
- *   Thresholds (Config.h): left/right white <460 (black >920),
- *                          rear   white <850 (black >960).
+ *   Thresholds (Config.h): left/right white <350 (black >800),
+ *                          rear   white <765 (black >820).
  *
  * Expected Serial output (on the dohyo):
  *   L: 690 [ OK  ] | B: 705 [ OK  ] | R: 688 [ OK  ]    <- black interior
@@ -60,7 +60,7 @@ void setup() {
 
   Serial.println(F("=== IR_Line_Test — QRE1113 bench test ==="));
   Serial.println(F("black = HIGH, white = LOW; raw < white threshold => EDGE"));
-  Serial.println(F("L/B/R white thr: 460/850/460, black thr: 920/960/920\n"));
+  Serial.println(F("L/B/R white thr: 350/765/350, black thr: 800/820/800\n"));
 }
 
 void loop() {
