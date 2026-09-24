@@ -50,7 +50,8 @@
 #define PIN_DIP3     7      // strategy bit 2 (MSB)
 #define PIN_LED1     8      // onboard user LED 1 (currently unused at runtime)
 #define PIN_LED2     9      // onboard user LED 2 (currently unused at runtime)
-#define PIN_TRIMPOT  A3     // onboard trimpot = live master-speed knob
+#define PIN_TRIMPOT  A3     // onboard trimpot — RESERVED, deliberately not read
+                            // by this firmware (see the TRIMPOT section below)
 
 // ============================================================================
 // MOTOR POLARITY / SAFETY
@@ -147,20 +148,33 @@
 #define ATTACK_SPEED_FAR_PCT    60
 #define ATTACK_CLOSE_DIST_MM    150   // <= this: full push
 #define ATTACK_FAR_DIST_MM      400   // >= this: cautious push
-#define ATTACK_STEER_GAIN_PCT   50    // % of base speed applied as full
-                                      // differential at bearing = +/-100
+#define ATTACK_STEER_GAIN_PCT   70    // % of base speed applied as full
+                                      // differential at bearing = +/-100.
+                                      // Higher = steers onto the opponent harder
+                                      // while pushing (more aggressive tracking).
+
+// Target "dead ahead" band, in bearing units (scale of sensorsOpponent():
+// -100 hard left, 0 dead ahead, +100 hard right).
+//   |bearing| <= this  -> ATTACK: keep pushing, steer with the gain above
+//   anything wider     -> FLANK: pivot on the spot to re-center first
+// Narrower band = the robot stops to pivot sooner (turns harder, advances less);
+// wider = it keeps committing forward and tracks with the differential only.
+#define TARGET_ON_AXIS_BAND     15
 
 #define SEARCH_SPEED_PCT        45    // base speed of all search patterns
-#define FLANK_TURN_SPEED_PCT    60    // pivot push while re-centering a target
+#define FLANK_TURN_SPEED_PCT    80    // pivot speed while re-centering a target
+                                      // (inner wheel counterspins at half this),
+                                      // raised for a faster turn onto the target
 #define EVADE_REVERSE_SPEED_PCT -80   // escape burst away from an edge
 
 // ============================================================================
-// TRIMPOT (live master-speed knob)
+// TRIMPOT — NOT USED
 // ============================================================================
-
-// Trimpot scales attack/flank/search speeds linearly from
-// TRIMPOT_MIN_SCALE_PCT (knob fully CCW) to 100% (fully CW).
-#define TRIMPOT_MIN_SCALE_PCT   50
+// The onboard trimpot is deliberately not read anywhere in this firmware: every
+// speed below is an absolute percent constant, so the same DIP selection gives
+// the same run every time, with no knob to drift between matches or to be left
+// in the wrong position by accident. PIN_TRIMPOT stays defined above so the pin
+// remains documented and reserved (A3 is not used for anything else).
 
 // ============================================================================
 // ToF HEALTH FAILSAFE
@@ -173,14 +187,36 @@
 // ============================================================================
 // EVADE TIMING
 // ============================================================================
+//
+// One evade program is FLEE -> TURN -> hand over to SEARCH. Both phases are
+// timed, so the same edge always produces the same escape. See evadeUpdate().
 
-#define EVADE_ESCAPE_MIN_MS   60    // mandatory blind escape burst — the robot
-                                    // may still be rolling off the dohyo even
-                                    // if the edge briefly stops reading
-// Length of ONE escape program. This is a repeat period, not a give-up timer:
-// if an edge is still flagged when it expires, the override re-enters EVADE
-// with a fresh timer and a fresh (live) edge index, so the robot keeps escaping
-// in EVADE_TOTAL_MAX_MS chunks for as long as it is over white.
-#define EVADE_TOTAL_MAX_MS    400
+#define EVADE_ESCAPE_MIN_MS   15    // FLEE floor: the mandatory blind burst.
+                                    // Short on purpose — it only exists so one
+                                    // flickering sample cannot end the flee. The
+                                    // moment the sensors read black the phase ends
+                                    // anyway, so a small floor means the robot
+                                    // turns as soon as it is actually clear.
+                                    // Tuned on the robot with Edge_Turn_Test.
+#define EVADE_FLEE_MAX_MS     300   // FLEE ceiling: once this long has passed
+                                    // with a sensor STILL reading white, stop
+                                    // fleeing anyway — that run cannot be
+                                    // measured, and pivoting over white would be
+                                    // pivoting along the edge.
+#define EVADE_TURN_MS         80    // *** OVERSHOOT KNOB *** duration of the
+                                    // pivot away from the edge. Tuned on the
+                                    // robot with resources/Edge_Turn_Test
+                                    // (see its GUIDE).
+// Pivot speeds used by the TURN phase (evadeTurnAway()). These set the pivot
+// RATE; together with EVADE_TURN_MS they set how far the robot rotates.
+#define EVADE_TURN_OUTER_PCT   70   // outer wheel, forward
+#define EVADE_TURN_INNER_PCT   50   // inner wheel, applied reversed
+#define EVADE_TURN_SPIN_PCT    60   // both wheels, when the REAR edge tripped
+                                    // (spin in place instead of an arc)
+// Safety net for one whole evade program — NOT a tuning knob, and deliberately
+// generous. It only fires if FLEE and TURN keep re-arming each other, which
+// needs a line sensor stuck reading white (dead or disconnected). The escape
+// duration itself is set by the two phase constants above.
+#define EVADE_TOTAL_MAX_MS    800
 
 #endif // CONFIG_H

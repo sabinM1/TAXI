@@ -105,7 +105,6 @@ void sensorsInit() {
   tofBus.begin(TOF_BUS_BAUD);
   tofBus.setTimeout(TOF_TIMEOUT_MS);    // must exceed the sensors' sampling budget
                                         // (reg 0xB0 = 12 ms on this robot, see Config.h)
-  pinMode(PIN_TRIMPOT, INPUT);
   lineSensL.begin();
   lineSensR.begin();
   lineSensB.begin();
@@ -114,11 +113,9 @@ void sensorsInit() {
   }
 }
 
-// Live master speed, percent between TRIMPOT_MIN_SCALE_PCT and 100.
-// Called by the state machine where speed is derived.
-uint8_t trimpotScale() {
-  return (uint8_t)map(analogRead(PIN_TRIMPOT), 0, 1023, TRIMPOT_MIN_SCALE_PCT, 100);
-}
+// NOTE: there is no trimpotScale() here any more. The onboard trimpot is not read
+// (see Config.h): every speed is an absolute percent constant, so a run is
+// reproducible and no knob position can change the behaviour.
 
 // Read only the ToF sensor at the active cursor (round-robin), normalise mm.
 static void tofReadOne() {

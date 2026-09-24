@@ -50,7 +50,8 @@
 #define PIN_DIP3     7      // strategy bit 2 (MSB)
 #define PIN_LED1     8      // onboard user LED 1 (currently unused at runtime)
 #define PIN_LED2     9      // onboard user LED 2 (currently unused at runtime)
-#define PIN_TRIMPOT  A3     // onboard trimpot = live master-speed knob
+#define PIN_TRIMPOT  A3     // onboard trimpot — RESERVED, deliberately not read
+                            // by this firmware (see the TRIMPOT section below)
 
 // ============================================================================
 // MOTOR POLARITY / SAFETY
@@ -167,12 +168,13 @@
 #define EVADE_REVERSE_SPEED_PCT -80   // escape burst away from an edge
 
 // ============================================================================
-// TRIMPOT (live master-speed knob)
+// TRIMPOT — NOT USED
 // ============================================================================
-
-// Trimpot scales attack/flank/search speeds linearly from
-// TRIMPOT_MIN_SCALE_PCT (knob fully CCW) to 100% (fully CW).
-#define TRIMPOT_MIN_SCALE_PCT   50
+// The onboard trimpot is deliberately not read anywhere in this firmware: every
+// speed below is an absolute percent constant, so the same DIP selection gives
+// the same run every time, with no knob to drift between matches or to be left
+// in the wrong position by accident. PIN_TRIMPOT stays defined above so the pin
+// remains documented and reserved (A3 is not used for anything else).
 
 // ============================================================================
 // ToF HEALTH FAILSAFE

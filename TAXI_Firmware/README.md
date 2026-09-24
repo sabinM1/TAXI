@@ -6,9 +6,9 @@ Autonomous mini-sumo (500 g class) combat firmware for a 5× ToF-sensor, 3-line-
 
 ## 1. Project Overview
 
-TAXI is an autonomous mini sumo robot: it waits for the competition start signal, executes a DIP-switch-selectable opening move, then hunts, tracks and pushes opponents using an array of five M60F laser ToF sensors. Three QRE1113 reflectance sensors guard the white dohyo edge and trigger an escape maneuver from any state. A 7-LED WS2812 ring shows live ToF/line telemetry in the pit (and, in debug builds, during the match too) and the on-board trimpot acts as a master speed knob.
+TAXI is an autonomous mini sumo robot: it waits for the competition start signal, executes a DIP-switch-selectable opening move, then hunts, tracks and pushes opponents using an array of five M60F laser ToF sensors. Three QRE1113 reflectance sensors guard the white dohyo edge and trigger an escape maneuver from any state. A 7-LED WS2812 ring shows live ToF/line telemetry in the pit (and, in debug builds, during the match too).
 
-Architecture: `QRE1113 edge sensors + M60F ToF array → ATmega32U4 (XMotion V3) → dual H-bridge → 2× JSUMO Core 6V 400 RPM motors`, with `DIP switches + trimpot → configuration input` and `WS2812 ring + USB serial → status output`.
+Architecture: `QRE1113 edge sensors + M60F ToF array → ATmega32U4 (XMotion V3) → dual H-bridge → 2× JSUMO Core 6V 400 RPM motors`, with `DIP switches → configuration input` and `WS2812 ring + USB serial → status output`. All speeds are compile-time constants (no trimpot master knob, see §7).
 
 The combat flow is a finite state machine: `IDLE → TACTIC → SEARCH ⇄ ATTACK/FLANK`, with `EVADE` as an edge-triggered override and `STOP` on loss of the start signal.
 
@@ -52,7 +52,7 @@ All pin numbers match `Config.h` exactly. Motors are driven directly by the onbo
 | D5 | DIP bit 0 (`PIN_DIP1`) | Onboard DIP switch | INPUT_PULLUP | Switch ON = bit set (firmware inverts; pin reads 1 when switch is DOWN/OFF) |
 | D6 | DIP bit 1 (`PIN_DIP2`) | Onboard DIP switch | INPUT_PULLUP | Same |
 | D7 | DIP bit 2 (`PIN_DIP3`) | Onboard DIP switch | INPUT_PULLUP | Same |
-| A3 | Trimpot (`PIN_TRIMPOT`) | Onboard trimpot wiper | INPUT (analog) | Master speed knob |
+| A3 | Trimpot (`PIN_TRIMPOT`) | Onboard trimpot wiper | Not configured | Reserved — the firmware never reads it (no master-speed knob, see §7) |
 | D8, D9 | User LEDs (`PIN_LED1/2`) | Onboard | OUTPUT | Reserved; currently unused at runtime |
 
 **ToF geometry (verified in `Full_Robot_Test`/`RingInfoDisplay.h`):**
@@ -137,7 +137,6 @@ loop():  sensorsUpdate()      // 1 ToF read + 1 line pass — ALL serial I/O
 | | `sensorsAnyEdge()` / `sensorsEdgeIndex()` | Debounced edge flags, priority rear>left>right |
 | | `sensorsHealthyCount()` | Live sensors (health counters) |
 | | `sensorsSetAttackScan()` | Front-3-only polling during combat |
-| | `trimpotScale()` | 50–100 % master speed from A3 |
 | `Strategies.h` | `strategiesInit()` | Read DIP, latch strategy 0–7 |
 | | `tacticRun()` | Non-blocking opening executor |
 | `StateMachine.h` | `stateMachineUpdate()` | Priority: stop signal > edge > state body (sole motor command site) |
@@ -172,7 +171,6 @@ All in `Config.h` (pins listed in §3 are omitted here).
 | `FLANK_TURN_SPEED_PCT` | 80 | Pivot speed while re-centering (inner wheel counterspins at half) | 30–100 |
 | `TARGET_ON_AXIS_BAND` | 15 | Bearing band treated as "dead ahead" (ATTACK); wider goes to FLANK | 5–40 |
 | `EVADE_REVERSE_SPEED_PCT` | −80 | FLEE speed for front edges (negative = reverse) | −100..−50 |
-| `TRIMPOT_MIN_SCALE_PCT` | 50 | Trimpot fully-CCW master speed | 0–100 |
 | `TOF_HEALTH_MAX` | 8 | Per-sensor health counter ceiling | — |
 | `TOF_MIN_HEALTHY_SENSORS` | 3 | Below this → degraded blind spin-search | 1–5 |
 | `EVADE_ESCAPE_MIN_MS` | 15 | FLEE floor: mandatory blind burst | 10–150 |
@@ -223,7 +221,7 @@ Expected sketch size: ~12.7 KB flash (44 %), ~0.66 KB RAM — verified compiling
 | 110 | 6 | Wait 300 ms → rush (deceptive) | Spin |
 | 111 | 7 | Zigzag wiggle ×3 | Sweep |
 
-2. Turn the trimpot to set master speed (CCW = 50 %, CW = 100 %).
+2. All speeds are fixed constants in `Config.h` (§7) — the robot has no master-speed knob, so the same DIP selection gives the same run every time.
 3. **Power on with the module in its armed state.** The module saves state in non-volatile memory — if the robot was previously started and never received a stop, the pin will already be HIGH at boot. The firmware detects this, locks in place, and blinks the onboard LED (D8) rapidly: ask the referee for a stop command, then power-cycle.
 4. Ring shows: **live pit telemetry** — the 5 ToF sensors as a green→red distance gradient on the outer LEDs (green = far, red = very close, blank = no reading), any line sensor over white overlaid solid white, and a green heartbeat blinking on the centre LED.
 5. When the referee sends start, the pin goes HIGH: the robot runs its opening, then hunts. The ring goes dark for the whole fight — except in a `DEBUG_VERBOSE` build, where it keeps showing the telemetry below.
@@ -249,8 +247,9 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
 - Per-sensor thresholds live in `Config.h`: left/right white <400 (black >800), rear white <765 (black >820). These are the verified on-robot values.
 - To recalibrate: run `IR_Line_Test` and note the black and white raw bands for each of L / B / R, then set each sensor's white threshold just above its white band and its black threshold just below its black band.
 
-**Master speed**
-- Put the robot on the dohyo, set trimpot mid-range, run a dummy push; increase until wheel slip, then back off. Set `MOTOR_BENCH_LIMIT_ENABLED` to `true` for all indoor testing (default is `false`, i.e. full match power).
+**Speeds**
+- No master knob: every speed is an absolute `*_PCT` constant in `Config.h` (§7). If a speed is wrong for the venue, change the constant and re-flash.
+- Indoor testing: set `MOTOR_BENCH_LIMIT_ENABLED` to `true` (default is `false`, i.e. full match power) — that clamps every motor command, evade and openings included.
 
 **Opening timings**
 - Each 100 % pivot step ≈ how many ms = 90° on YOUR robot must be measured (`s1`/`s2` use 120 ms as a first guess). Film a run at 120 fps or mark-and-count turns; adjust the step durations in `Strategies.h`.

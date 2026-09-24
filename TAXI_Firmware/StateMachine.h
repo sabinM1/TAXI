@@ -113,11 +113,9 @@ static void startModuleUpdate() {
  *   SWEEP — alternating shallow arcs (figure-8-ish), most area covered
  * After SEARCH_PATTERN_TIMEOUT_MS without seeing anything, the pattern
  * mirrors (searchDir flips) so we never spiral forever in one direction.
- * Scaled by the trimpot master.
  */
 static void searchUpdate(SearchStyle style) {
-  uint8_t scale = trimpotScale();
-  int sp = (SEARCH_SPEED_PCT * scale) / 100;
+  int sp = SEARCH_SPEED_PCT;
   if (millis() - searchModeStart > SEARCH_PATTERN_TIMEOUT_MS) {
     searchModeStart = millis();
     searchDir = -searchDir;
@@ -144,15 +142,12 @@ static void searchUpdate(SearchStyle style) {
  * Base push speed for the attack: full power at ATTACK_CLOSE_DIST_MM,
  * tapering linearly to ATTACK_SPEED_FAR_PCT at ATTACK_FAR_DIST_MM.
  * Falls back to the far speed when the closest reading is invalid.
- * Finally scaled by the trimpot master.
  */
 static int attackBaseSpeed(uint16_t mm, bool ok) {
-  int base;
-  if (!ok || mm >= ATTACK_FAR_DIST_MM)  base = ATTACK_SPEED_FAR_PCT;
-  else if (mm <= ATTACK_CLOSE_DIST_MM)  base = ATTACK_SPEED_CLOSE_PCT;
-  else base = (int)map((long)mm, ATTACK_CLOSE_DIST_MM, ATTACK_FAR_DIST_MM,
-                       ATTACK_SPEED_CLOSE_PCT, ATTACK_SPEED_FAR_PCT);
-  return (base * trimpotScale()) / 100;
+  if (!ok || mm >= ATTACK_FAR_DIST_MM) return ATTACK_SPEED_FAR_PCT;
+  if (mm <= ATTACK_CLOSE_DIST_MM)      return ATTACK_SPEED_CLOSE_PCT;
+  return (int)map((long)mm, ATTACK_CLOSE_DIST_MM, ATTACK_FAR_DIST_MM,
+                  ATTACK_SPEED_CLOSE_PCT, ATTACK_SPEED_FAR_PCT);
 }
 
 /**
@@ -385,11 +380,9 @@ void stateMachineUpdate() {
     case ST_SEARCH: {
       // Degraded (too many ToF dead): blind spin-search — in-place rotation is
       // the safest way to stumble back onto the opponent, and it can never
-      // drive off the dohyo. Trimpot-scaled like every other motion, so the
-      // master knob keeps meaning "master".
+      // drive off the dohyo.
       if (degraded) {
-        int sp = (SEARCH_SPEED_PCT * trimpotScale()) / 100;
-        motorsSet(sp, -sp);
+        motorsSet(SEARCH_SPEED_PCT, -SEARCH_SPEED_PCT);
         break;
       }
       int8_t bearing = sensorsOpponent();
@@ -409,10 +402,9 @@ void stateMachineUpdate() {
         if (millis() - lastSeenMs > ATTACK_TARGET_LOST_MS) {
           gotoState(ST_SEARCH); searchModeStart = millis();
         } else {
-          // Push on blind momentum: degraded means the sensor bus is untrustworthy,
-          // so use a deliberately cautious 40% (still trimpot-scaled).
-          int push = degraded ? (40 * trimpotScale()) / 100
-                              : attackBaseSpeed(0xFFFF, false);
+          // Push on blind momentum: degraded means the sensor bus is
+          // untrustworthy, so use a deliberately cautious 40%.
+          int push = degraded ? 40 : attackBaseSpeed(0xFFFF, false);
           motorsSet(push, push);
         }
       } else if (bearing < -TARGET_ON_AXIS_BAND || bearing > TARGET_ON_AXIS_BAND) {

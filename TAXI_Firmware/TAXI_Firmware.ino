@@ -165,8 +165,7 @@ static void debugDump() {
   Serial.print(F(" Bearing=")); Serial.print(sensorsOpponent());
   Serial.print(F("   Closest=")); if (ok) Serial.print(mm); else Serial.print(F("---"));
   Serial.print(F("mm  Health=")); Serial.print(sensorsHealthyCount());
-  Serial.print('/'); Serial.print(TOF_SENSOR_COUNT);
-  Serial.print(F("  Trim=")); Serial.print(trimpotScale()); Serial.println('%');
+  Serial.print('/'); Serial.print(TOF_SENSOR_COUNT); Serial.println();
   Serial.print(F(" Loop=")); Serial.print(gLoopUs); Serial.print(F("us"));
   Serial.print(F("   Sensors=")); Serial.print(gSensorUs); Serial.println(F("us"));
   debugSep();
