@@ -105,7 +105,7 @@
 #define REAR_BIAS_PCT    55   //   ..and the bias on the other wheel
                               //   both -> evadeEscapeBurst() in StateMachine.h
 
-// Approach speed, fixed. Use SEARCH_SPEED_PCT (45) to match the firmware's hunt
+// Approach speed, fixed. Use SEARCH_SPEED_PCT (18) to match the firmware's hunt
 // speed, or ATTACK_SPEED_FAR_PCT (60) to match its cautious push. The evade
 // flee/turn constants below are absolute too, so nothing here depends on any knob
 // position: same numbers, same behaviour, every run.

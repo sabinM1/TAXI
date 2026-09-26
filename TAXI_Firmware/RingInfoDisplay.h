@@ -263,6 +263,22 @@ CRGB RingScaleColor(CRGB color, uint8_t brightness) {
 }
 
 /**
+ * Map the robot's drive effort (0..100 %) to the speed-indicator color:
+ * cyan at full speed fading to green at a standstill.
+ *
+ *   speedPct == 100 -> cyan  (HUE_AQUA)
+ *   speedPct == 0   -> green (HUE_GREEN)
+ *
+ * Smooth hue sweep, integer only. Callers scale the result (see
+ * RING_SPEED_LED_BRIGHTNESS) to dim the indicator down to the rest of the ring.
+ */
+CRGB RingSpeedColor(uint8_t speedPct) {
+    if (speedPct > 100) speedPct = 100;
+    uint8_t hue = (uint8_t)map((long)speedPct, 0, 100, HUE_GREEN, HUE_AQUA);
+    return CHSV(hue, 255, 255);
+}
+
+/**
  * Return true if a raw distance value should be treated as invalid (blank LED).
  * Invalid means either the "no reading" sentinel OR an out-of-range value.
  * ID3 is mm, all others are cm.

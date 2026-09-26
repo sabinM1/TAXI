@@ -113,8 +113,19 @@ static void ringStatusUpdate() {
 
   FastLED.clear();
   renderToFGradient();
+
+  // LED 1 (the BACK led, otherwise only the rear-line indicator) doubles as the
+  // drive-speed indicator: cyan at full speed fading to green at a standstill, at
+  // 40 % brightness so it reads as a secondary cue. Effort is the average of the
+  // two wheel magnitudes, so a hard in-place pivot reads as fast as a straight
+  // charge. Rendered BEFORE the line overlay so a rear edge still wins and shows
+  // white.
+  int spdL, spdR; motorsGetLast(&spdL, &spdR);
+  uint8_t effort = (uint8_t)((abs(spdL) + abs(spdR)) / 2);
+  ringLeds[1] = RingScaleColor(RingSpeedColor(effort), RING_SPEED_LED_BRIGHTNESS);
+
   if (lineLeft)    ringLeds[3] = CRGB::White;   // left edge  (front-left)
-  if (lineRear)    ringLeds[1] = CRGB::White;   // rear edge  (back)
+  if (lineRear)    ringLeds[1] = CRGB::White;   // rear edge  (back) - wins over speed
   if (lineRight)   ringLeds[5] = CRGB::White;   // right edge (front-right)
   if (blinkOn)     ringLeds[0] = CRGB::Green;   // heartbeat (center)
   RingShow();
@@ -166,8 +177,7 @@ static void debugDump() {
   Serial.print(F("   Strategy=")); Serial.print(strategyIndex);
   Serial.print(F("  Start=")); Serial.println(digitalRead(PIN_START));
   Serial.print(F(" Bearing=")); Serial.print(targetBearing());
-  Serial.print(F(" (raw ")); Serial.print(sensorsOpponent()); Serial.print(')');
-  Serial.print(F("  Contact=")); Serial.print(sensorsContact() ? 1 : 0);
+  Serial.print(F("  Contact=")); Serial.print(targetInContact() ? 1 : 0);
   Serial.print(F("   Closest=")); if (ok) Serial.print(mm); else Serial.print(F("---"));
   Serial.print(F("mm  Health=")); Serial.print(sensorsHealthyCount());
   Serial.print('/'); Serial.print(TOF_SENSOR_COUNT); Serial.println();

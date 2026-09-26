@@ -55,9 +55,13 @@
 #define LM_PWM_TOP        255         // TOP is held in OCR4C: 8-bit counter -> 256 speed steps
                                       // (8-bit is what analogWrite() gave here anyway, and it
                                       //  works whether or not Timer4's 10-bit mode is enabled)
-#define LM_PWM_CLKSEL     _BV(CS42)   // TCCR4B clock select CS43:CS40 = 0100 = /8
-                                      // -> 16 MHz / 8 = 2 MHz timer clock
-                                      // -> PWM frequency = 2 MHz / 256 = 7.8 kHz
+#define LM_PWM_CLKSEL     (_BV(CS42) | _BV(CS41) | _BV(CS40))
+                                      // TCCR4B CS43:CS40 = 0111 = /64
+                                      // -> 16 MHz / 64 = 250 kHz timer clock
+                                      // -> PWM frequency = 250 kHz / 256 = 977 Hz
+                                      // Same rate as the right channel (Timer0 /64,
+                                      // for millis()) so both motors make the same
+                                      // torque at part duty.
 
 // Last commanded speeds, for the debug dump (not readback — just what we sent).
 static int motorLastL = 0, motorLastR = 0;
@@ -109,20 +113,20 @@ static inline void motorWriteLeftDuty(uint16_t duty) {
  *                Clamped; with MOTOR_BENCH_LIMIT_ENABLED it is clamped
  *                tighter for safe bench tests.
  */
-static inline void motorWrite(uint8_t pwmPin, uint8_t dirPin, bool invert, int p) {
+static inline void motorWrite(uint8_t pwmPin, uint8_t dirPin, bool invert, int p, uint8_t trimPct) {
 #if MOTOR_BENCH_LIMIT_ENABLED
   p = constrain(p, -MOTOR_BENCH_MAX_PCT, MOTOR_BENCH_MAX_PCT);
 #else
   p = constrain(p, -100, 100);
 #endif
-  bool fwd = (p >= 0) ^ invert;     // logical forward after mounting flip
+  bool fwd = (p >= 0) ^ invert;
   digitalWrite(dirPin, fwd ? HIGH : LOW);
 
-  if (pwmPin == PIN_LM_PWM) {
-    motorWriteLeftDuty((uint16_t)map(abs(p), 0, 100, 0, LM_PWM_TOP));
-  } else {
-    analogWrite(pwmPin, map(abs(p), 0, 100, 0, 255));
-  }
+  uint16_t duty = (uint16_t)map(abs(p), 0, 100, 0, 255);
+  if (trimPct != 100) duty = (uint16_t)((uint32_t)duty * trimPct / 100);
+
+  if (pwmPin == PIN_LM_PWM) motorWriteLeftDuty(duty);
+  else                      analogWrite(pwmPin, duty);
 }
 
 /**
@@ -132,8 +136,8 @@ static inline void motorWrite(uint8_t pwmPin, uint8_t dirPin, bool invert, int p
 static inline void motorsSet(int leftPct, int rightPct) {
   motorLastL = leftPct;
   motorLastR = rightPct;
-  motorWrite(PIN_LM_PWM, PIN_LM_DIR, LM_INVERTED, leftPct);
-  motorWrite(PIN_RM_PWM, PIN_RM_DIR, RM_INVERTED, rightPct);
+  motorWrite(PIN_LM_PWM, PIN_LM_DIR, LM_INVERTED, leftPct, LM_TRIM_PCT);
+  motorWrite(PIN_RM_PWM, PIN_RM_DIR, RM_INVERTED, rightPct, RM_TRIM_PCT);
 }
 
 /** Cut drive to both motors (coast). Safe default everywhere. */

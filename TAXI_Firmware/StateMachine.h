@@ -31,7 +31,7 @@
 #include "Sensors.h"
 #include "Strategies.h"
 
-enum RobotState : uint8_t { ST_IDLE, ST_TACTIC, ST_SEARCH, ST_ATTACK, ST_FLANK, ST_EVADE, ST_STOP };
+enum RobotState : uint8_t { ST_IDLE, ST_TACTIC, ST_SEARCH, ST_ATTACK, ST_FLANK, ST_BACKOFF, ST_EVADE, ST_STOP };
 static RobotState state = ST_IDLE;
 
 // Start/stop signal latch. The NanoLabs module holds its state in
@@ -56,6 +56,30 @@ static uint32_t   evadePhaseStart = 0;   // start of the current phase
 static EvadePhase evadePhase = EV_FLEE;
 static int8_t     evadeFrom = 0;
 
+// Side-backoff bookkeeping. backoffStart is the millis() of the last backoff
+// trigger; it doubles as the cooldown anchor (see SIDE_BACKOFF_COOLDOWN_MS).
+// Seeded so the first backoff is armed immediately.
+static uint32_t backoffStart = (uint32_t)0 - (SIDE_BACKOFF_MS + SIDE_BACKOFF_COOLDOWN_MS);
+
+// How long the "opponent alongside" condition has held, and whether it is
+// holding right now. The hold restarts from zero any loop the condition is false
+// (reading back out of range, or a side sensor that is not being polled), so the
+// backoff only fires on a reading that STAYS close.
+static uint32_t sideCloseSince  = 0;
+static bool     sideCloseActive = false;
+
+/**
+ * Continuous milliseconds either SIDE ToF has been reporting an opponent at
+ * contact range. 0 when the condition is not currently true. Evaluated every
+ * loop so the hold keeps accumulating while the robot is reversing.
+ */
+static uint32_t sideCloseHeldMs() {
+  if (!sensorsSideClose(SIDE_BACKOFF_DIST_MM)) { sideCloseActive = false; return 0; }
+  uint32_t now = millis();
+  if (!sideCloseActive) { sideCloseActive = true; sideCloseSince = now; }
+  return now - sideCloseSince;
+}
+
 static bool isStarted() { return startSignal == HIGH; }
 
 #if DEBUG_VERBOSE
@@ -66,6 +90,7 @@ static const char* stateName(RobotState s) {
     case ST_SEARCH: return "SEARCH";
     case ST_ATTACK: return "ATTACK";
     case ST_FLANK:  return "FLANK";
+    case ST_BACKOFF: return "BACKOFF";
     case ST_EVADE:  return "EVADE";
     case ST_STOP:   return "STOP";
     default:        return "?";
@@ -104,70 +129,99 @@ static void startModuleUpdate() {
   startSignal = digitalRead(PIN_START);
 }
 
-// ---------------- target bearing: live reading + short memory ---------------
+// ------------- target bearing + last-seen direction -------------------------
 
-static int8_t   memBearing  = 0;    // direction the opponent was last seen in
-static uint8_t  memStrength = 0;    // how strong that sighting was (0..100)
-static uint32_t memStamp    = 0;    // when it was taken
-
-/**
- * How much a sighting taken `age` ms ago still biases the bearing, in percent.
- * Linear fade to zero across TARGET_MEMORY_MS.
- */
-static uint8_t targetMemoryWeight(uint32_t age) {
-  if (age >= TARGET_MEMORY_MS) return 0;
-  uint32_t v = (uint32_t)memStrength * (TARGET_MEMORY_MS - age) / TARGET_MEMORY_MS;
-  return (uint8_t)(v * TARGET_MEMORY_MAX_PCT / 100);
-}
+// Direction the opponent was last seen in: a LIVE sighting at/inside
+// LAST_SEEN_MAX_MM. Used whenever the sensors have only a far or empty picture.
+// This is NOT a filter — a close reading always wins outright, so it can never
+// lag a pivot the way the old bearing memory did.
+static int8_t lastSeenBearing = 0;
+static bool   lastSeenValid   = false;
+// Did the most recent targetBearing() call have an actual sensor reading (however
+// far)? Distinguishes "steering on a live reading" from "steering on the memory"
+// — only the former may hold ATTACK/FLANK against the lost-target timeout.
+static bool   bearingRawSeen = false;
 
 /**
- * The bearing the robot actually steers on.
+ * The bearing the robot steers on.
  *
- * The live reading from sensorsOpponent(), blended towards the direction the
- * opponent was last seen in by a weight that fades out over TARGET_MEMORY_MS.
- * This is what stops a single frame from reversing the turn: a reading that
- * contradicts the remembered direction only gets the remaining say, so the robot
- * finishes the correction it started and re-orients after the memory expires.
+ *   close sighting (<= LAST_SEEN_MAX_MM) -> the live reading, and it becomes the
+ *                                           remembered direction
+ *   far sighting, or nothing             -> the remembered direction, if any
+ *   nothing remembered yet               -> the far reading as-is, or 127
  *
- * 127 ("nothing visible") is passed straight through — the memory must never
- * fake a target, or target acquisition and the lost-target timeout break.
+ * The far case is the point of the memory: at long range the ToF bearing is weak
+ * and jumpy, so steering on where the opponent was last actually seen is a better
+ * bet than on a faint far reading.
  *
- * Refresh rule: the memory is retaken from the live reading when it does not
- * contradict what is stored (same side of centre) and is at least as confident.
- * A sudden opposite reading therefore does NOT overwrite the memory — if it did,
- * there would be nothing left to damp the turn with.
+ * No smoothing anywhere: a lagging bearing makes the robot keep pivoting after it
+ * has already swept past the opponent. Chatter at the band edges is handled by
+ * the ATTACK/FLANK hysteresis bands, not by filtering the bearing.
+ *
+ * 127 ("nothing visible") is only returned when there is no memory to fall back on.
  */
 static int8_t targetBearing() {
   int8_t raw = sensorsOpponent();
-  if (raw == 127) return 127;
-
   bool ok; uint16_t mm = sensorsClosestMm(&ok);
+  bearingRawSeen = (raw != 127);
 
-  // Confidence 0..100: how close the opponent was seen. Full at
-  // TARGET_MEMORY_NEAR_MM, nothing at ATTACK_FAR_DIST_MM.
-  uint8_t conf = 0;
-  if (ok && mm <= TARGET_MEMORY_NEAR_MM) {
-    conf = 100;
-  } else if (ok && mm < ATTACK_FAR_DIST_MM) {
-    conf = 100 - (uint8_t)((uint32_t)(mm - TARGET_MEMORY_NEAR_MM) * 100 /
-                           (ATTACK_FAR_DIST_MM - TARGET_MEMORY_NEAR_MM));
+  // Close enough to be a real, trustworthy sighting: remember it, steer on it.
+  if (raw != 127 && ok && mm <= LAST_SEEN_MAX_MM) {
+    lastSeenBearing = raw;
+    lastSeenValid   = true;
+    return raw;
   }
 
-  uint8_t w = targetMemoryWeight(millis() - memStamp);
-  bool agrees = (raw >= 0 && memBearing >= 0) || (raw <= 0 && memBearing <= 0);
+  // Far away, or nothing visible: prioritise the remembered direction.
+  if (lastSeenValid) return lastSeenBearing;
 
-  if (w == 0 || (agrees && conf >= memStrength)) {
-    memBearing  = raw;
-    memStrength = conf;
-    memStamp    = millis();
-    return raw;                     // nothing to damp: steer on the live reading
-  }
+  return raw;      // nothing remembered yet: use the far reading as-is
+}
 
-  return (int8_t)constrain((int32_t)raw * (100 - w) / 100 +
-                           (int32_t)memBearing * w / 100, -100, 100);
+// ---------------- contact latch ----------------
+
+// millis() of the last time the MIDDLE sensor read blade contact. Seeded so that
+// "was contact seen within CONTACT_LATCH_MS?" is false before anything happens.
+static uint32_t contactStamp = (uint32_t)0 - CONTACT_LATCH_MS;
+
+/**
+ * Blade contact, latched.
+ *
+ * sensorsContact() is a single-frame test on the MIDDLE sensor, which is exactly
+ * the sensor that gets blinded at impact: the blade ends up inside the M60F's
+ * 9 mm minimum range, so the reading goes invalid right when we are in the shove.
+ * A bare single-frame test therefore drops the robot out of the full-power push
+ * at the worst moment — back to the steering push (one wheel slowed) or even the
+ * cautious blind push.
+ *
+ * Latching contact for CONTACT_LATCH_MS makes the commitment stick: once the
+ * robot has decided it is in a shove, a bad or missing frame cannot interrupt it.
+ * The latch is stamped fresh every frame that real contact is seen, so a
+ * sustained shove keeps it armed; it expires naturally if the opponent gets away.
+ */
+static bool targetInContact() {
+  if (sensorsContact()) { contactStamp = millis(); return true; }
+  return (uint32_t)(millis() - contactStamp) < CONTACT_LATCH_MS;
 }
 
 // ------------------------- state helpers ------------------------------------
+
+/**
+ * Begin a search. The pattern's first leg turns toward the side the opponent was
+ * last seen on, so losing sight does not drop the robot into a blind sweep away
+ * from where the opponent actually is — this is the "prioritise the remembered
+ * direction" rule.
+ *
+ * Only the DIRECTION of the first leg is biased: searchUpdate() still flips
+ * searchDir every SEARCH_PATTERN_TIMEOUT_MS, so the robot can never spiral one way
+ * forever. This is also why the memory is a direction and not a servo target — a
+ * remembered bearing does not change as the robot turns, so steering on it
+ * directly would spin the robot endlessly.
+ */
+static void enterSearch() {
+  searchModeStart = millis();
+  if (lastSeenValid) searchDir = (lastSeenBearing >= 0) ? 1 : -1;
+}
 
 /**
  * Steer the robot while hunting. Three patterns:
@@ -219,7 +273,8 @@ static int attackBaseSpeed(uint16_t mm, bool ok) {
  * ATTACK_CLOSE_DIST_MM, ATTACK_SPEED_FAR_PCT at ATTACK_FAR_DIST_MM.
  * Steering: one smooth proportional term — bearing > 0 (opponent to the
  * right) slows the right motor and vice-versa, scaled by ATTACK_STEER_GAIN_PCT.
- * Stamps lastSeenMs so the caller's lost-target timeout stays armed.
+ * Stamps lastSeenMs only while there is an actual reading, so steering on a
+ * remembered direction cannot hold the robot in ATTACK forever.
  *
  * NOT used at blade contact: the ST_ATTACK body intercepts that case first, so
  * this always runs with at least some standoff (see PUSH_CONTACT_DIST_MM).
@@ -227,7 +282,7 @@ static int attackBaseSpeed(uint16_t mm, bool ok) {
 static void attackUpdate() {
   int8_t bearing = targetBearing();
   bool ok; uint16_t mm = sensorsClosestMm(&ok);
-  lastSeenMs = millis();
+  if (bearingRawSeen) lastSeenMs = millis();
 
   int base = attackBaseSpeed(mm, ok);
 
@@ -254,7 +309,7 @@ static void attackUpdate() {
 static void flankUpdate() {
   int8_t bearing = targetBearing();
   if (bearing == 127) return;
-  lastSeenMs = millis();
+  if (bearingRawSeen) lastSeenMs = millis();
 
   uint8_t mag = (uint8_t)abs((int)bearing);          // 1..100
   uint8_t outer = (uint8_t)constrain(map((long)mag, TARGET_ON_AXIS_BAND, 100,
@@ -348,7 +403,7 @@ static void evadeUpdate() {
   if (millis() - evadeStart >= EVADE_TOTAL_MAX_MS) {
     motorsStop();
     gotoState(ST_SEARCH);
-    searchModeStart = millis();
+    enterSearch();
     return;
   }
 
@@ -368,7 +423,7 @@ static void evadeUpdate() {
         // line, or a line sensor stuck reading white.
         motorsStop();
         gotoState(ST_SEARCH);
-        searchModeStart = millis();
+        enterSearch();
       } else if (live < 0 && pt >= EVADE_ESCAPE_MIN_MS) {
         // Clear, and past the mandatory blind burst -> time to turn.
         evadePhase = EV_TURN;
@@ -389,7 +444,7 @@ static void evadeUpdate() {
       if (pt >= EVADE_TURN_MS) {
         motorsStop();
         gotoState(ST_SEARCH);
-        searchModeStart = millis();
+        enterSearch();
       }
       break;
   }
@@ -429,41 +484,71 @@ void stateMachineUpdate() {
     gotoState(ST_EVADE);
   }
 
-  // Degraded fallback: too many ToF dead -> stay in safe spin-search.
+  // Side-sensor backoff. An opponent alongside the robot (a SIDE ToF at contact
+  // range) cannot be acted on by the front sensors, so reverse hard to open the
+  // gap. The condition must HOLD for SIDE_BACKOFF_CONFIRM_MS first, so a single
+  // grazing frame or a stale reading cannot fire the reverse. Checked AFTER the
+  // line-edge override above, which therefore always wins: the reverse can never
+  // bypass the edge check. The cooldown stops a target that stays alongside from
+  // making the robot back up forever.
+  uint32_t sideHeldMs = sideCloseHeldMs();
+  if (state != ST_BACKOFF && state != ST_IDLE && state != ST_STOP &&
+      sideHeldMs >= SIDE_BACKOFF_CONFIRM_MS &&
+      (uint32_t)(millis() - backoffStart) >= SIDE_BACKOFF_MS + SIDE_BACKOFF_COOLDOWN_MS) {
+    backoffStart    = millis();
+    sideCloseActive = false;      // the next backoff needs its own fresh hold
+    gotoState(ST_BACKOFF);
+  }
+
+  // Degraded fallback: too many ToF sensors are not ANSWERING. This only ever
+  // changes the BLIND search/push (see the ST_SEARCH and ST_ATTACK cases) — a
+  // visible target is always acted on, no matter what this says.
   bool degraded = sensorsHealthyCount() < TOF_MIN_HEALTHY_SENSORS;
 
   // ToF front-priority scan only while pushing. FLANK deliberately keeps the
   // full round-robin: it exists to chase a target that is off to the side, so it
   // needs the side sensors live — capping it to the front trio would leave it
-  // blind to the very reading that sent it there.
+  // blind to the very reading that sent it there. Same for BACKOFF, which must
+  // keep watching the sides it is escaping from.
   sensorsSetAttackScan(state == ST_ATTACK);
 
   switch (state) {
     case ST_IDLE:
       motorsStop();
-      if (isStarted()) { tacticReset(); gotoState(ST_TACTIC); }
+      if (isStarted()) {
+        // Match start: forget anything seen during bench testing, so the
+        // remembered direction is only ever populated by this round.
+        lastSeenValid = false;
+        tacticReset();
+        gotoState(ST_TACTIC);
+      }
       break;
 
     case ST_TACTIC:
       if (tacticRun()) {
         gotoState(ST_SEARCH);
-        searchModeStart = millis();
+        enterSearch();
       }
       break;
 
     case ST_SEARCH: {
-      // Degraded (too many ToF dead): blind spin-search — in-place rotation is
-      // the safest way to stumble back onto the opponent, and it can never
-      // drive off the dohyo.
-      if (degraded) {
-        motorsSet(SEARCH_SPEED_PCT, -SEARCH_SPEED_PCT);
+      // Engagement uses the RAW reading, at any range: a visible opponent must be
+      // chased, so this deliberately does NOT go through targetBearing() — that
+      // prefers the remembered direction, and a stale guess must never start an
+      // attack. The memory only steers once an attack is underway.
+      int8_t sighted = sensorsOpponent();
+      if (sighted != 127) {
+        lastSeenMs = millis();
+        gotoState((sighted >= -TARGET_ON_AXIS_BAND && sighted <= TARGET_ON_AXIS_BAND)
+                      ? ST_ATTACK : ST_FLANK);
         break;
       }
-      int8_t bearing = targetBearing();
-      if (bearing != 127) {
-        lastSeenMs = millis();
-        gotoState((bearing >= -TARGET_ON_AXIS_BAND && bearing <= TARGET_ON_AXIS_BAND)
-                      ? ST_ATTACK : ST_FLANK);
+      // Nothing visible. If too many ToF sensors are not answering, blind spin is
+      // the safest way to stumble back onto the opponent and it can never drive
+      // off the dohyo. Otherwise run the selected search pattern — whose first leg
+      // enterSearch() turns toward the last-seen direction.
+      if (degraded) {
+        motorsSet(SEARCH_SPEED_PCT, -SEARCH_SPEED_PCT);
         break;
       }
       searchUpdate(STRATEGIES[strategyIndex].search);
@@ -474,23 +559,26 @@ void stateMachineUpdate() {
       // Blade contact beats everything else in this state: both wheels full
       // ahead, no steering trim, and no switch to FLANK. lastSeenMs is stamped
       // because the opponent is very much visible — without it the lost-target
-      // timeout would eventually pull the robot out of its own shove.
-      if (sensorsContact()) {
+      // timeout would eventually pull the robot out of its own shove. Latched
+      // (targetInContact) so one invalid frame at impact cannot break the shove.
+      if (targetInContact()) {
         motorsSet(PUSH_CONTACT_SPEED_PCT, PUSH_CONTACT_SPEED_PCT);
         lastSeenMs = millis();
         break;
       }
 
-      int8_t bearing = degraded ? 127 : targetBearing();
-      if (bearing == 127) {
-        if (millis() - lastSeenMs > ATTACK_TARGET_LOST_MS) {
-          gotoState(ST_SEARCH); searchModeStart = millis();
-        } else {
-          // Push on blind momentum: degraded means the sensor bus is
-          // untrustworthy, so use a deliberately cautious 40%.
-          int push = degraded ? 40 : attackBaseSpeed(0xFFFF, false);
-          motorsSet(push, push);
-        }
+      int8_t bearing = targetBearing();
+      bool lost = (millis() - lastSeenMs) > ATTACK_TARGET_LOST_MS;
+
+      if (lost) {
+        // No LIVE sighting for the whole grace window, so the bearing (if any) is
+        // only a remembered direction: stop attacking on it and go search.
+        gotoState(ST_SEARCH); enterSearch();
+      } else if (bearing == 127) {
+        // Push on blind momentum. Degraded means too few sensors are ANSWERING,
+        // so keep it deliberately cautious.
+        int push = degraded ? 40 : attackBaseSpeed(0xFFFF, false);
+        motorsSet(push, push);
       } else if (bearing < -TARGET_FLANK_BAND || bearing > TARGET_FLANK_BAND) {
         // Off by more than the outer threshold: pivot to re-center. Anything
         // inside TARGET_FLANK_BAND stays in ATTACK (that dead zone is the
@@ -503,14 +591,15 @@ void stateMachineUpdate() {
     }
 
     case ST_FLANK: {
-      if (degraded) { gotoState(ST_SEARCH); searchModeStart = millis(); break; }
       int8_t bearing = targetBearing();
-      if (bearing == 127) {
-        if (millis() - lastSeenMs > ATTACK_TARGET_LOST_MS) {
-          gotoState(ST_SEARCH); searchModeStart = millis();
-        } else {
-          motorsStop();
-        }
+      bool lost = (millis() - lastSeenMs) > ATTACK_TARGET_LOST_MS;
+
+      if (lost) {
+        // Memory-only pivot would otherwise never end (a remembered bearing does
+        // not shrink as the robot turns). Bound it and go search.
+        gotoState(ST_SEARCH); enterSearch();
+      } else if (bearing == 127) {
+        motorsStop();
       } else if (bearing >= -TARGET_ON_AXIS_BAND && bearing <= TARGET_ON_AXIS_BAND) {
         gotoState(ST_ATTACK);
       } else {
@@ -521,6 +610,20 @@ void stateMachineUpdate() {
 
     case ST_EVADE:
       evadeUpdate();
+      break;
+
+    // Side-sensor backoff: reverse flat out for SIDE_BACKOFF_MS, then hand back
+    // to SEARCH, which turns to bring the opponent onto the front sensors. The
+    // line-edge override runs before this every loop, so the reverse can never
+    // drive the robot over the border — the line check is never bypassed.
+    case ST_BACKOFF:
+      if ((uint32_t)(millis() - backoffStart) >= SIDE_BACKOFF_MS) {
+        motorsStop();
+        gotoState(ST_SEARCH);
+        enterSearch();
+      } else {
+        motorsSet(SIDE_BACKOFF_SPEED_PCT, SIDE_BACKOFF_SPEED_PCT);
+      }
       break;
 
     // Latching terminal state: the referee's stop ends the match, so the only

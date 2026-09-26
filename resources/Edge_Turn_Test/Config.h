@@ -64,6 +64,10 @@
 #define LM_INVERTED  true
 #define RM_INVERTED  false
 
+// Per-side straight-line trim (percent of duty), see TAXI_Firmware/Motor.h.
+#define LM_TRIM_PCT   100
+#define RM_TRIM_PCT   100
+
 // Bench-safety clamp: while true, no motor command exceeds
 // MOTOR_BENCH_MAX_PCT anywhere (attack, evade, tactics included).
 // Set false only for a real match on the dohyo.
@@ -145,9 +149,9 @@
 // Attack base speed ramps from ATTACK_SPEED_CLOSE_PCT (point-blank) down to
 // ATTACK_SPEED_FAR_PCT (at ATTACK_FAR_DIST_MM), linearly in between.
 #define ATTACK_SPEED_CLOSE_PCT  100
-#define ATTACK_SPEED_FAR_PCT    60
-#define ATTACK_CLOSE_DIST_MM    150   // <= this: full push
-#define ATTACK_FAR_DIST_MM      400   // >= this: cautious push
+#define ATTACK_SPEED_FAR_PCT    75
+#define ATTACK_CLOSE_DIST_MM    250   // <= this: full push
+#define ATTACK_FAR_DIST_MM      400   // >= this: ATTACK_SPEED_FAR_PCT
 
 // Blade-to-blade contact. The MIDDLE ToF (id 3, looking straight ahead) reading
 // this close means the opponent is on the blade. From there both wheels go to
@@ -157,7 +161,7 @@
 // switch to FLANK — contact is worth more than re-centering first.
 #define PUSH_CONTACT_DIST_MM     30   // MIDDLE sensor distance that means contact
 #define PUSH_CONTACT_SPEED_PCT  100   // both wheels, no differential
-#define ATTACK_STEER_GAIN_PCT   70    // % of base speed applied as full
+#define ATTACK_STEER_GAIN_PCT  100    // % of base speed applied as full
                                       // differential at bearing = +/-100.
                                       // Higher = steers onto the opponent harder
                                       // while pushing (more aggressive tracking).
@@ -172,23 +176,18 @@
 // crossed it, so one extra sensor lighting up was enough to spin the robot over a
 // target that was nearly straight ahead. The dead zone between the two numbers
 // removes that cliff and stops the two states chattering.
-#define TARGET_ON_AXIS_BAND     15   // |bearing| <= this -> ATTACK
-#define TARGET_FLANK_BAND       22   // |bearing| >  this -> FLANK
+#define TARGET_ON_AXIS_BAND     18   // |bearing| <= this -> ATTACK
+#define TARGET_FLANK_BAND       26   // |bearing| >  this -> FLANK
                                      // in between: stay in the state we are in
 
-// Bearing memory: a sighting keeps steering the robot for TARGET_MEMORY_MS,
-// faded out linearly, so a momentary reading in the opposite direction cannot
-// reverse a correction mid-turn — the robot finishes the turn it started and only
-// re-orients once the memory has expired. The CLOSER the sighting, the stronger
-// the memory: full at TARGET_MEMORY_NEAR_MM, nothing at ATTACK_FAR_DIST_MM.
-#define TARGET_MEMORY_MS       250   // how long a sighting keeps steering
-#define TARGET_MEMORY_MAX_PCT   70   // its weight on the bearing at t = 0
-#define TARGET_MEMORY_NEAR_MM  250   // sighting at/below this = full strength
+// There is deliberately NO bearing memory/filter: the robot steers on the live
+// reading. Any smoothing lagged the bearing during a pivot and turned corrections
+// into spins.
 
-#define SEARCH_SPEED_PCT        45    // base speed of all search patterns
-#define FLANK_TURN_SPEED_PCT    80    // pivot speed at |bearing| = 100 (inner
+#define SEARCH_SPEED_PCT        20    // base speed of all search patterns
+#define FLANK_TURN_SPEED_PCT   100    // pivot speed at |bearing| = 100 (inner
                                       // wheel counterspins at half this)
-#define FLANK_TURN_MIN_PCT      35    // pivot speed at the FLANK entry threshold,
+#define FLANK_TURN_MIN_PCT      56    // pivot speed at the FLANK entry threshold,
                                       // scaled linearly up to FLANK_TURN_SPEED_PCT
                                       // above it: full power for a big correction,
                                       // a nudge for a small one. One value for both

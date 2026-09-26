@@ -1,18 +1,25 @@
 stateDiagram-v2
   IDLE --> TACTIC: start signal HIGH (raw read)
   TACTIC --> SEARCH: opening done
-  SEARCH --> ATTACK: opponent front (|bearing| <= 15)
-  SEARCH --> FLANK: opponent on side (|bearing| > 15)
-  ATTACK --> FLANK: opponent slid off center
-  FLANK --> ATTACK: re-centered
+  SEARCH --> ATTACK: opponent front (|bearing| <= 18)
+  SEARCH --> FLANK: opponent off-axis (|bearing| > 26)
+  ATTACK --> FLANK: |bearing| > 26
+  FLANK --> ATTACK: |bearing| <= 18
   ATTACK --> SEARCH: lost >400ms
   FLANK --> SEARCH: lost >400ms
+  BACKOFF --> SEARCH: after SIDE_BACKOFF_MS (100ms reverse)
   EVADE --> SEARCH: after escape
-  SEARCH --> EVADE
-  ATTACK --> EVADE
-  FLANK --> EVADE
-  TACTIC --> EVADE
+  TACTIC --> BACKOFF: side ToF <= 30mm held 150ms
+  SEARCH --> BACKOFF: side ToF <= 30mm held 150ms
+  ATTACK --> BACKOFF: side ToF <= 30mm held 150ms
+  FLANK --> BACKOFF: side ToF <= 30mm held 150ms
+  SEARCH --> EVADE: line edge
+  ATTACK --> EVADE: line edge
+  FLANK --> EVADE: line edge
+  BACKOFF --> EVADE: line edge
+  TACTIC --> EVADE: line edge
   EVADE --> STOP
+  BACKOFF --> STOP
   TACTIC --> STOP
   SEARCH --> STOP
   ATTACK --> STOP
@@ -21,4 +28,9 @@ stateDiagram-v2
     Highest priority: checked before every
     other rule, on every loop. Terminal --
     only a power cycle leaves this state.
+  end note
+  note right of EVADE
+    Second priority (line edge). Outranks
+    BACKOFF, so the reverse can never back
+    the robot over the border.
   end note

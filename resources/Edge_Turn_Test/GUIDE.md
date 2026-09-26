@@ -43,7 +43,7 @@ power-cycle). STOP cuts the motors instantly. Pin read raw, no debounce.
 | `TURN_OUTER_PCT` / `TURN_INNER_PCT` | 70 / 50 | Pivot speeds |
 | `FLEE_MS` / `FLEE_MAX_MS` | 15 / 300 | Flee floor / ceiling |
 | `FLEE_SPEED_PCT` | −80 | Flee speed |
-| `CRUISE_PCT` | `SEARCH_SPEED_PCT` (45) | Approach speed — matches the firmware's hunt speed |
+| `CRUISE_PCT` | `SEARCH_SPEED_PCT` (18) | Approach speed — matches the firmware's hunt speed |
 | `CRUISE_MAX_MS` | 5000 | Give up if no line found |
 | `SERIAL_LOG` | 0 | 1 = print runs to USB (tether only) |
 

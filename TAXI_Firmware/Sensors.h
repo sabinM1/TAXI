@@ -131,20 +131,32 @@ static void tofReadOne() {
   }
   DistanceSensor& s = tofSensors[i];
 
-  bool ok; uint16_t mm;
+  // Read the register directly so we can tell apart the two very different
+  // reasons a reading is unusable:
+  //   responded == false  -> the sensor did not ANSWER at all (bus/sensor fault)
+  //   responded == true   -> it answered, it just has no target in range
+  // Only the first is a fault; the second is the normal "nothing in front" case.
+  bool responded, ok;
+  uint16_t raw = 0, mm = 0;      // zero-initialised: a failed read leaves them unwritten
   if (s.mDeviceIndex == 3) {
-    uint16_t raw = s.readDistance_mm();
-    ok = (raw != TOF_INVALID_MM && raw >= TOF_MIN_VALID_MM && raw <= TOF_MAX_VALID_MM);
+    responded = s.readRegister(0x01, &raw);      // id 3 reports millimetres
     mm = raw;
+    ok = responded && raw != TOF_INVALID_MM && raw >= TOF_MIN_VALID_MM && raw <= TOF_MAX_VALID_MM;
   } else {
-    uint16_t raw = s.readDistance_cm();
+    responded = s.readRegister(0x06, &raw);      // the rest report centimetres
     mm = (uint16_t)raw * 10;
-    ok = (raw != TOF_INVALID_CM && mm >= TOF_MIN_VALID_MM && mm <= TOF_MAX_VALID_MM);
+    ok = responded && raw != TOF_INVALID_CM && mm >= TOF_MIN_VALID_MM && mm <= TOF_MAX_VALID_MM;
   }
   tofValid[i] = ok;
   tofMm[i]    = ok ? mm : 0;
-  if (ok) { if (tofHealth[i] < TOF_HEALTH_MAX) tofHealth[i]++; }
-  else    { if (tofHealth[i] > 0)              tofHealth[i]--; }
+
+  // Health tracks the BUS, not the target. A sensor that answers is alive even
+  // when it reports "nothing in range" — which is the NORMAL state for every
+  // sensor that is not currently pointing at the opponent. Counting that as a
+  // fault made the robot declare itself degraded (and blind-spin) as soon as the
+  // opponent was visible to only one or two sensors.
+  if (responded) { if (tofHealth[i] < TOF_HEALTH_MAX) tofHealth[i]++; }
+  else           { if (tofHealth[i] > 0)              tofHealth[i]--; }
 }
 
 static void lineReadAll() {
@@ -237,6 +249,18 @@ int8_t sensorsOpponent() {
  */
 bool sensorsContact() {
   return tofValid[2] && tofMm[2] <= PUSH_CONTACT_DIST_MM;
+}
+
+/**
+ * Either SIDE ToF at or inside `mm` — index 0 = ID1 side right, index 4 = ID5
+ * side left. These look perpendicular to the robot, so this means "the opponent
+ * is alongside", the one case the front sensors cannot act on.
+ *
+ * Returns false for a sensor that is not currently being polled: in ATTACK the
+ * scan is narrowed to the front trio, which invalidates the side readings.
+ */
+bool sensorsSideClose(uint16_t mm) {
+  return (tofValid[0] && tofMm[0] <= mm) || (tofValid[4] && tofMm[4] <= mm);
 }
 
 /** Smallest currently-valid ToF distance in mm; ok=false when none. */

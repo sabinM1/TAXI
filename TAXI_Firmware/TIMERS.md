@@ -135,12 +135,17 @@ TCCR4C  = 0;                            // channel D off -> D6 stays a plain inp
 digitalWrite(PIN_LM_PWM, LOW);          // park the pin low before handing it over
 TC4H    = 0;                            // 10-bit registers: keep the two MSBs clear
 OCR4C   = 255;                          // OCR4C holds the Fast PWM TOP value
-TCCR4B  = _BV(CS42);                    // prescaler /8
+TCCR4B  = _BV(CS42)|_BV(CS41)|_BV(CS40); // prescaler /64
 TCCR4D  = 0;                            // WGM41:WGM40 = 00 -> Fast PWM, TOP = OCR4C
 TCCR4A  = _BV(PWM4B) | _BV(COM4B1);     // connect OC4B, non-inverting (0x21)
 ```
 
-- PWM frequency: 16 MHz / 8 / 256 = **7.8 kHz**.
+- PWM frequency: 16 MHz / 64 / 256 = **977 Hz**, deliberately the same as the
+  right channel's `analogWrite()` rate (Timer0 is also /64, for `millis()`).
+  Matching matters: at part duty the slower channel has more current ripple and
+  therefore makes less torque, so two different rates made the robot curve
+  steadily towards the faster side. 977 Hz is also what the XMotion library's
+  own `MotorControl()` produces on both motors.
 - Resolution: **8-bit**. `TCCR4B` bit 7 (`PWM4X`) selects 8- vs 10-bit mode and
   the core leaves it 0, so 8-bit values are correct either way — and 8-bit is
   what `analogWrite()` would have given here anyway.
