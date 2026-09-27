@@ -90,13 +90,13 @@
 //                    EDIT THESE — everything is compile-time
 // ============================================================================
 
-#define TURN_MS         80   // *** THE KNOB *** pivot duration in ms.
+#define TURN_MS        120   // *** THE KNOB *** pivot duration in ms.
                               // -> EVADE_TURN_MS in TAXI_Firmware/Config.h
 
 #define TURN_OUTER_PCT   70   // pivot: outer wheel forward   -> EVADE_TURN_OUTER_PCT
 #define TURN_INNER_PCT   50   // pivot: inner wheel reversed  -> EVADE_TURN_INNER_PCT
 
-#define FLEE_MS          15   // flee floor (blind burst)     -> EVADE_ESCAPE_MIN_MS
+#define FLEE_MS          35   // flee floor (blind burst)     -> EVADE_ESCAPE_MIN_MS
 #define FLEE_MAX_MS     300   // flee ceiling; past this the run is invalid
                               //                              -> EVADE_FLEE_MAX_MS
 #define FLEE_SPEED_PCT  -80   // flee speed, negative = reverse
@@ -105,10 +105,12 @@
 #define REAR_BIAS_PCT    55   //   ..and the bias on the other wheel
                               //   both -> evadeEscapeBurst() in StateMachine.h
 
-// Approach speed, fixed. Use SEARCH_SPEED_PCT (18) to match the firmware's hunt
-// speed, or ATTACK_SPEED_FAR_PCT (60) to match its cautious push. The evade
-// flee/turn constants below are absolute too, so nothing here depends on any knob
-// position: same numbers, same behaviour, every run.
+// Approach speed, fixed. Set it to whatever SEARCH_SPEED_PCT is in
+// TAXI_Firmware/Config.h so the test drives in under the firmware's hunt-speed
+// conditions; it is defined there, so this only needs changing if you want the
+// test to run at a different speed on purpose. The flee/turn constants above are
+// absolute too, so nothing here depends on any knob position: same numbers, same
+// behaviour, every run.
 #define CRUISE_PCT       SEARCH_SPEED_PCT
 #define CRUISE_MAX_MS    5000   // safety: if no line is found in this time, stop
 

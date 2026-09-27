@@ -33,10 +33,31 @@ uint16_t tofMm[TOF_SENSOR_COUNT];
 bool     tofValid[TOF_SENSOR_COUNT];
 
 // Bearing weights (left negative, right positive) matching the layout above.
-static const int8_t TOF_WEIGHT[TOF_SENSOR_COUNT] = { 4, 2, 0, -2, -4 };
+// TOF_WEIGHT_SCALE turns a weight into bearing units (weight * 25), so the
+// largest weight (+/-4, the 90-degree side sensors) reaches the full +/-100
+// "hard over" and everything else is read as a fraction of that.
+//
+// These weights are STEERING AUTHORITY, not a measured angle. The sensors sit at
+// 0, +/-25 and +/-90 degrees, and a weight proportional to the angle would make
+// the front pair far too quiet: a target seen ONLY by a front-outer sensor is a
+// target the robot is about to drive straight past, and it has to be turned onto
+// almost as hard as one that is already alongside. At the old +/-2 (roughly
+// angle-proportional) a front-left-only sighting produced a bearing of 50 — half
+// the turn rate of a side sensor — so the robot under-turned and overshot every
+// time the opponent sat off a front corner while the sides stayed quiet. +/-3
+// keeps the sides loudest (4) but lifts the front pair to 75, which commands a
+// hard turn-in without quite asking for a full pivot on a ~25-degree error.
+//
+// The front trio outranking the sides (see sensorsOpponent()) is what stops a
+// side reading from interfering while the front can see the target, so this gap
+// only ever decides the case where a side sensor is the ONLY thing looking at
+// the opponent. If a front-corner sighting still under-turns, go to +/-4, which
+// makes a front-outer reading command exactly the same turn as a side one.
+static const int8_t TOF_WEIGHT[TOF_SENSOR_COUNT] = { 4, 3, 0, -3, -4 };
+#define TOF_WEIGHT_SCALE 25
 
-// The three FRONT sensors (ids 2, 3, 4) are indices 1..3. Only these are polled
-// in attack-scan mode; everything else uses the full round-robin.
+// The three FRONT sensors (ids 2, 3, 4) are indices 1..3. sensorsOpponent() uses
+// this to let the front trio outrank the two side sensors — see the note there.
 static inline bool tofIsFrontIndex(uint8_t i) { return i >= 1 && i <= 3; }
 
 static SingleWireSerial tofBus(false);           // bus on D4 (Config: PIN_TOF_BUS)
@@ -45,9 +66,7 @@ static DistanceSensor tofSensors[TOF_SENSOR_COUNT] = {
   DistanceSensor(&tofBus, 3), DistanceSensor(&tofBus, 4),
   DistanceSensor(&tofBus, 5)
 };
-static uint8_t tofCursor = 0;
-static bool    tofAttackScan = false;            // true -> only front 3 ids
-static uint8_t frontCursor = 0;                  // cycles front idx 1,2,3
+static uint8_t tofCursor = 0;                    // round-robin position
 
 // Simple health counters per sensor (0..TOF_HEALTH_MAX).
 static uint8_t tofHealth[TOF_SENSOR_COUNT];
@@ -60,30 +79,6 @@ uint8_t sensorsHealthyCount() {
   for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++)
     if (tofHealth[i] >= TOF_HEALTH_MAX / 2) n++;
   return n;
-}
-
-/**
- * Switch the ToF poll pattern. In attack mode only the three front sensors
- * (ids 2, 3, 4) are cycled -> ~3x faster updates on the sensors that decide
- * the fight.
- *
- * Entering attack scan also INVALIDATES the two side readings. They are the
- * last values measured before the switch, and because sensorsOpponent()
- * weights every reading by inverse distance, one close side reading taken a
- * moment earlier would keep outvoting all three front sensors — dragging the
- * bearing off-centre and pushing ATTACK into a FLANK pivot against data that is
- * no longer being sampled. A reading nobody is refreshing must not steer.
- *
- * They become valid again on their next real poll (the round-robin refreshes
- * all five within ~5 loops ≈ 10 ms), and their health counters are untouched,
- * so the degraded-mode check is unaffected.
- */
-void sensorsSetAttackScan(bool on) {
-  if (on == tofAttackScan) return;            // only act on the transition
-  tofAttackScan = on;
-  if (!on) return;
-  for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++)
-    if (!tofIsFrontIndex(i)) tofValid[i] = false;
 }
 
 // --------------------------------------------------------------- Line -------
@@ -118,33 +113,42 @@ void sensorsInit() {
 // reproducible and no knob position can change the behaviour.
 
 // Read only the ToF sensor at the active cursor (round-robin), normalise mm.
+//
+// Every sensor is polled, in every state: the chase has to be able to turn onto
+// an opponent that is off to a side, and the side-backoff needs the side sensors
+// live, so there is no front-only scan any more. A full five-sensor sweep costs
+// ~10 ms, which is fast enough for all of it.
 static void tofReadOne() {
-  // Pick the sensor index this call: full round-robin, or front trio
-  // (indices 1,2,3 = ids 2,3,4) when in attack scan mode.
-  uint8_t i;
-  if (tofAttackScan) {
-    i = 1 + frontCursor;                         // cycles 1,2,3
-    frontCursor = (frontCursor + 1) % 3;
-  } else {
-    i = tofCursor;
-    tofCursor = (tofCursor + 1) % TOF_SENSOR_COUNT;
-  }
+  uint8_t i = tofCursor;
+  tofCursor = (tofCursor + 1) % TOF_SENSOR_COUNT;
   DistanceSensor& s = tofSensors[i];
 
-  bool ok; uint16_t mm;
+  // Read the register directly so we can tell apart the two very different
+  // reasons a reading is unusable:
+  //   responded == false  -> the sensor did not ANSWER at all (bus/sensor fault)
+  //   responded == true   -> it answered, it just has no target in range
+  // Only the first is a fault; the second is the normal "nothing in front" case.
+  bool responded, ok;
+  uint16_t raw = 0, mm = 0;      // zero-initialised: a failed read leaves them unwritten
   if (s.mDeviceIndex == 3) {
-    uint16_t raw = s.readDistance_mm();
-    ok = (raw != TOF_INVALID_MM && raw >= TOF_MIN_VALID_MM && raw <= TOF_MAX_VALID_MM);
+    responded = s.readRegister(0x01, &raw);      // id 3 reports millimetres
     mm = raw;
+    ok = responded && raw != TOF_INVALID_MM && raw >= TOF_MIN_VALID_MM && raw <= TOF_MAX_VALID_MM;
   } else {
-    uint16_t raw = s.readDistance_cm();
+    responded = s.readRegister(0x06, &raw);      // the rest report centimetres
     mm = (uint16_t)raw * 10;
-    ok = (raw != TOF_INVALID_CM && mm >= TOF_MIN_VALID_MM && mm <= TOF_MAX_VALID_MM);
+    ok = responded && raw != TOF_INVALID_CM && mm >= TOF_MIN_VALID_MM && mm <= TOF_MAX_VALID_MM;
   }
   tofValid[i] = ok;
   tofMm[i]    = ok ? mm : 0;
-  if (ok) { if (tofHealth[i] < TOF_HEALTH_MAX) tofHealth[i]++; }
-  else    { if (tofHealth[i] > 0)              tofHealth[i]--; }
+
+  // Health tracks the BUS, not the target. A sensor that answers is alive even
+  // when it reports "nothing in range" — which is the NORMAL state for every
+  // sensor that is not currently pointing at the opponent. Counting that as a
+  // fault made the robot declare itself degraded (and blind-spin) as soon as the
+  // opponent was visible to only one or two sensors.
+  if (responded) { if (tofHealth[i] < TOF_HEALTH_MAX) tofHealth[i]++; }
+  else           { if (tofHealth[i] > 0)              tofHealth[i]--; }
 }
 
 static void lineReadAll() {
@@ -203,8 +207,8 @@ int8_t sensorsEdgeIndex() {
 /**
  * Opponent bearing from the ToF array: -100 = hard left, 0 = dead ahead,
  * +100 = hard right, 127 = nothing visible. Weighted vote where each valid
- * sensor contributes its geometric weight scaled by inverse distance —
- * close reflections dominate, far/uncertain ones barely count.
+ * sensor contributes its geometric weight scaled by INVERSE DISTANCE SQUARED —
+ * see the WEIGHT note in the loop body for why the falloff is squared.
  *
  * The three FRONT sensors outrank the two side ones: as soon as any of the front
  * trio has a reading, the sides are ignored. Their geometric weight is the
@@ -212,7 +216,7 @@ int8_t sensorsEdgeIndex() {
  * a wall, a hand — would otherwise outvote the sensors that are actually looking
  * at the target and throw the heading off. The sides still decide on their own
  * when nothing in front can see anything, which is exactly the "opponent is beside
- * me" case FLANK exists for.
+ * me" case the side-backoff state exists for.
  */
 int8_t sensorsOpponent() {
   bool frontSeen = tofValid[1] || tofValid[2] || tofValid[3];
@@ -220,8 +224,25 @@ int8_t sensorsOpponent() {
   for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++) {
     if (!tofValid[i]) continue;
     if (frontSeen && !tofIsFrontIndex(i)) continue;
+
+    // WEIGHT: linear distance (the old `TOF_MAX_VALID_MM + 1 - mm`) gave a
+    // 500 mm reading roughly half the say of a 170 mm one, so a far reflection on
+    // ONE side cancelled a close one on the other and the vote came out
+    // "dead ahead" — the robot drove straight past an opponent it could clearly
+    // see (e.g. front-left at 170 mm against front-right at 500 mm averaged to a
+    // bearing of ~-17, inside the old ATTACK dead zone, so the robot drove on
+    // past). Squaring the same term makes the weight collapse far faster with
+    // distance: the same pair now reads ~-31, i.e. a real steering correction. The
+    // closest sensor therefore decides the heading, which is what makes the robot
+    // commit to what it is about to hit instead of averaging that away against
+    // something further off.
+    //
+    // Integer-safe: w <= (800+1)^2 = 641601 and the largest term is
+    // 4 * 25 * 641601 ~= 6.4e7, so the 5-sensor sum stays far inside int32.
+    // It is a pure ratio, so the absolute scale cancels in wsum / wtot.
     int32_t w = (int32_t)TOF_MAX_VALID_MM + 1 - tofMm[i];   // near -> heavy
-    wsum += (int32_t)TOF_WEIGHT[i] * 25 * w;
+    w *= w;                                                 // squared falloff
+    wsum += (int32_t)TOF_WEIGHT[i] * TOF_WEIGHT_SCALE * w;
     wtot += w;
   }
   if (wtot == 0) return 127;
@@ -237,6 +258,19 @@ int8_t sensorsOpponent() {
  */
 bool sensorsContact() {
   return tofValid[2] && tofMm[2] <= PUSH_CONTACT_DIST_MM;
+}
+
+/**
+ * Either SIDE ToF at or inside `mm` — index 0 = ID1 side right, index 4 = ID5
+ * side left. These look perpendicular to the robot, so this means "the opponent
+ * is alongside", the one case the front sensors cannot act on.
+ *
+ * Only true for a reading that is currently valid, i.e. one that has been
+ * refreshed this sweep: every sensor is polled in every state, so a false here
+ * means "nothing alongside", not "not looked at".
+ */
+bool sensorsSideClose(uint16_t mm) {
+  return (tofValid[0] && tofMm[0] <= mm) || (tofValid[4] && tofMm[4] <= mm);
 }
 
 /** Smallest currently-valid ToF distance in mm; ok=false when none. */
