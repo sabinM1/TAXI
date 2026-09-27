@@ -10,7 +10,7 @@ TAXI is an autonomous mini sumo robot: it waits for the competition start signal
 
 Architecture: `QRE1113 edge sensors + M60F ToF array → ATmega32U4 (XMotion V3) → dual H-bridge → 2× JSUMO Core 6V 400 RPM motors`, with `DIP switches → configuration input` and `WS2812 ring + USB serial → status output`. All speeds are compile-time constants (no trimpot master knob, see §7).
 
-The combat flow is a finite state machine: `IDLE → TACTIC → SEARCH ⇄ ATTACK/FLANK`, with `EVADE` as an edge-triggered override and `STOP` on loss of the start signal.
+The combat flow is a finite state machine: `IDLE → TACTIC → SEARCH → ATTACK`, with `BACKOFF` (opponent alongside) and `EVADE` (edge) as overrides from any combat state, and `STOP` on loss of the start signal. SEARCH and ATTACK are separated by a single distance (`TARGET_ENGAGE_MM`), and both use the same steering law — there is no separate pivot state.
 
 ---
 
@@ -65,6 +65,7 @@ All pin numbers match `Config.h` exactly. Motors are driven directly by the onbo
 
 - Sensors 1, 2, 4, 5 answer register `0x06` in **cm**; sensor 3 answers register `0x01` in **mm**.
 - No-response sentinels: `0xFF` (cm), `0xFFF` (mm); valid window 9–800 mm.
+- Steering authority per sensor (`TOF_WEIGHT` in `Sensors.h`, left→right): **4 / 3 / 0 / 3 / 4**, scaled by `TOF_WEIGHT_SCALE = 25`. A sighting on a side sensor alone therefore commands a full ±100 bearing, a front-outer sensor alone ±75, and the middle sensor alone 0 (dead ahead, but it only sets the *direction*, never the strength).
 
 **Reserved / do-not-touch pins:** D0/D1 (Serial1 — free but avoid conflict with USB debugging assumptions), D2 (Leonardo SDA, free), plus anything the USB stack owns. No level shifting anywhere: all external modules run at 5 V logic.
 
@@ -119,11 +120,10 @@ loop():  sensorsUpdate()      // 1 ToF read + 1 line pass — ALL serial I/O
 |---|---|
 | `ST_IDLE` | Motors stopped; waits for start signal HIGH (read raw each loop) |
 | `ST_TACTIC` | Plays the DIP-selected opening timed-step sequence, then → SEARCH |
-| `ST_SEARCH` | Spin/arc/sweep pattern; flips direction every 3 s if blind; on sight picks ATTACK (\|bearing\| ≤ `TARGET_ON_AXIS_BAND`) or FLANK |
-| `ST_ATTACK` | Target ahead (\|bearing\| ≤ `TARGET_FLANK_BAND` while in it): distance-proportional push + proportional steering; front-only ToF scan. At blade contact (≤ `PUSH_CONTACT_DIST_MM` on the middle sensor) both wheels go flat out and the steering trim is skipped |
-| `ST_FLANK` | Target off-axis (\|bearing\| > `TARGET_FLANK_BAND`): pivot proportional to the bearing, returns to ATTACK below `TARGET_ON_AXIS_BAND` |
+| `ST_SEARCH` | Spin/arc/sweep pattern at `SEARCH_SPEED_PCT`; flips direction every 3 s if blind. A sighting **beyond** `TARGET_ENGAGE_MM` is turned onto slowly (same steering law, search speed) without committing; inside `TARGET_ENGAGE_MM` → ATTACK |
+| `ST_ATTACK` | Opponent inside `TARGET_ENGAGE_MM`: speed from the `ATTACK_SPEED_RAMP` table (35 % at the engage distance, 100 % inside `ATTACK_CLOSE_DIST_MM`) + one proportional steering term (`steerToward()`, scaled by base speed, so a hard bearing counter-rotates the inner wheel). All 5 ToF sensors stay polled. At blade contact (≤ `PUSH_CONTACT_DIST_MM` on the middle sensor) both wheels go flat out and the steering trim is skipped |
 | `ST_BACKOFF` | Opponent alongside (a SIDE ToF at ≤ `SIDE_BACKOFF_DIST_MM` **held** for `SIDE_BACKOFF_CONFIRM_MS`): reverse flat out for `SIDE_BACKOFF_MS`, then → SEARCH. Rate-limited by `SIDE_BACKOFF_COOLDOWN_MS`; the line-edge override still outranks it |
-| `ST_EVADE` | Edge override, two timed phases: FLEE (≥15 ms blind, keeps fleeing while any sensor reads white, ≤300 ms; rear edge drives **forward**) → TURN (fixed 80 ms pivot away from the edge) → SEARCH |
+| `ST_EVADE` | Edge override, two timed phases: FLEE (≥35 ms blind reverse, keeps fleeing while any sensor reads white, ≤300 ms; rear edge drives **forward**) → TURN (fixed 120 ms pivot away from the edge) → SEARCH |
 | `ST_STOP` | Start signal lost → motors off, latched until power cycle |
 
 **Key functions:**
@@ -133,19 +133,19 @@ loop():  sensorsUpdate()      // 1 ToF read + 1 line pass — ALL serial I/O
 | `Motor.h` | `motorsSet(l, r)` | Signed-percent drive, applies bench cap + left-motor inversion |
 | | `motorsStop()` | Coast both motors |
 | `Sensors.h` | `sensorsUpdate()` | One ToF poll + one line pass per loop |
-| | `sensorsOpponent()` | Bearing −100..+100 (127 = nothing), inverse-distance weighted; the front trio outranks the side sensors |
+| | `sensorsOpponent()` | Bearing −100..+100 (127 = nothing), weighted vote: per-sensor steering authority `TOF_WEIGHT` `{4, 3, 0, −3, −4}` (side, front-outer, middle, front-outer, side) × inverse distance **squared**, so the closest sensor dominates; the front trio outranks the side sensors |
 | `StateMachine.h` | `targetBearing()` | The bearing actually steered on: the live reading, or the remembered last-seen direction when the sensors only see something far away or nothing |
 | | `enterSearch()` | Begins a search; biases the first leg toward the last-seen direction |
 | | `sensorsClosestMm()` | Nearest valid distance |
 | | `sensorsContact()` | True when the MIDDLE sensor reads blade contact (<`PUSH_CONTACT_DIST_MM`) |
 | | `sensorsAnyEdge()` / `sensorsEdgeIndex()` | Debounced edge flags, priority rear>left>right |
 | | `sensorsHealthyCount()` | ToF sensors currently **answering** on the bus (a sensor with nothing in range is still healthy) |
-| | `sensorsSetAttackScan()` | Front-3-only polling during combat |
 | `Strategies.h` | `strategiesInit()` | Read DIP, latch strategy 0–7 |
 | | `tacticRun()` | Non-blocking opening executor |
-| `StateMachine.h` | `stateMachineUpdate()` | Priority: stop signal > edge > state body (sole motor command site) |
+| `StateMachine.h` | `stateMachineUpdate()` | Priority: stop signal > edge > side backoff > state body (sole motor command site) |
 | | `startModuleUpdate()` | Raw start/stop sample — no debounce, by design |
-| | `attackUpdate()` / `flankUpdate()` | Target ahead (ram + proportional steer) / off-axis (pivot to re-center) |
+| | `steerToward(base, bearing)` | **The** steering law: drive at `base`, shift a bearing-scaled differential between the wheels. Used by the attack and by SEARCH's approach leg |
+| | `attackUpdate(bearing)` | One chase tick: speed from the closest reading, steering from `steerToward()` |
 
 **Protocols:** ToF bus = printable ASCII-hex (`R<id><reg>\n` query, hex value + `\n` reply) over `SingleWireSerial` @ 115200 on D4. LEDs = WS2812 800 kbps via FastLED. Debug = USB `Serial` @ 115200.
 
@@ -168,23 +168,23 @@ All in `Config.h` (pins listed in §3 are omitted here).
 | `LINE_DEBOUNCE_SAMPLES` | 2 | Consecutive hits to confirm an edge | 1–5 |
 | `SEARCH_PATTERN_TIMEOUT_MS` | 3000 | Blind-search time before mirroring the pattern | 1000–6000 |
 | `ATTACK_TARGET_LOST_MS` | 400 | Target-loss grace before falling back to SEARCH | 200–1000 |
-| `ATTACK_SPEED_CLOSE_PCT` | 100 | Push speed at/below `ATTACK_CLOSE_DIST_MM` | 40–100 |
-| `ATTACK_SPEED_FAR_PCT` | 75 | Push speed at/above `ATTACK_FAR_DIST_MM` — the "charge" floor, raised for aggression | 30–100 |
-| `ATTACK_CLOSE_DIST_MM` / `ATTACK_FAR_DIST_MM` | 250 / 400 | Speed ramp endpoints (full power out to 250 mm) | 50–800 |
+| `ATTACK_SPEED_CLOSE_PCT` | 100 | Base speed at `ATTACK_CLOSE_DIST_MM` (the near anchor of the ramp table) | 40–100 |
+| `ATTACK_SPEED_FAR_PCT` | 35 | Base speed at `TARGET_ENGAGE_MM` (the far anchor), and the blind-push speed when nothing is visible | 20–100 |
+| `ATTACK_CLOSE_DIST_MM` | 60 | Full power from here in. Deliberately equal to `PUSH_CONTACT_DIST_MM`, so the speed is already at `PUSH_CONTACT_SPEED_PCT` when the contact latch takes over | 20–800 |
+| `ATTACK_SPEED_RAMP` (table, `Config.h`) | 300→35, 200→45, 100→60, 60→100 | **The attack speed profile** — (distance, speed) anchors interpolated linearly in the closest ToF reading. Gives >300 mm `SEARCH_SPEED_PCT`, then 300→35 %, 250→40 %, 200→45 %, 150→53 %, 100→60 %, 80→80 %, ≤60→100 %. Far → near order | anchors 20–800 mm, 0–100 % |
 | `PUSH_CONTACT_DIST_MM` / `PUSH_CONTACT_SPEED_PCT` / `CONTACT_LATCH_MS` | 60 / 100 / 250 | MIDDLE ToF contact distance, the flat speed used there (both wheels, no steering trim), and how long contact stays latched after the last sighting | 20–120 / 60–100 / 100–500 |
-| `ATTACK_STEER_GAIN_PCT` | 100 | Max differential at bearing ±100 (% of base) — higher turns onto the opponent harder | 10–100 |
-| `SEARCH_SPEED_PCT` | 20 | Base speed of all search patterns | 10–80 |
-| `FLANK_TURN_SPEED_PCT` / `FLANK_TURN_MIN_PCT` | 100 / 56 | Pivot speed at \|bearing\| = 100 and at the FLANK entry threshold (linear between; inner wheel counterspins at half) | 30–100 / 20–80 |
-| `TARGET_ON_AXIS_BAND` / `TARGET_FLANK_BAND` | 18 / 26 | Bearing thresholds: enter FLANK above 26, return to ATTACK below 18 (dead zone = hysteresis) | 5–40 |
-| `LAST_SEEN_MAX_MM` | 350 | A sighting at/inside this distance is remembered as "where the opponent was last seen"; farther readings (and no reading at all) defer to that memory | 100–800 |
+| `ATTACK_STEER_GAIN_PCT` | 100 | The turn-in: differential at bearing ±100 as a % of the current base speed. At attack speed this counter-rotates the inner wheel; at search speed the same bearing is a gentle arc | 50–150 |
+| `TARGET_ENGAGE_MM` | 300 | **The** mode switch. SEARCH commits to ATTACK inside this distance, and a sighting inside it is also the one trusted/remembered as "last seen" | 100–800 |
+| `SEARCH_SPEED_PCT` | 30 | Base speed of every search pattern and of the far-sighting approach leg — the speed everywhere outside `TARGET_ENGAGE_MM` | 5–80 |
 | `EVADE_REVERSE_SPEED_PCT` | −80 | FLEE speed for front edges (negative = reverse) | −100..−50 |
-| `SIDE_BACKOFF_DIST_MM` / `SIDE_BACKOFF_CONFIRM_MS` / `SIDE_BACKOFF_MS` / `SIDE_BACKOFF_SPEED_PCT` / `SIDE_BACKOFF_COOLDOWN_MS` | 30 / 150 / 100 / −100 / 300 | Opponent-alongside backoff: side-ToF trigger distance, how long the reading must HOLD before it fires, reverse duration, reverse speed, and minimum gap between backoffs | 10–60 / 50–400 / 50–300 / −100..−50 / 100–800 |
+| `SIDE_BACKOFF_DIST_MM` / `SIDE_BACKOFF_CONFIRM_MS` / `SIDE_BACKOFF_MS` / `SIDE_BACKOFF_SPEED_PCT` / `SIDE_BACKOFF_COOLDOWN_MS` | 20 / 350 / 100 / −100 / 300 | Opponent-alongside backoff: side-ToF trigger distance, how long the reading must HOLD before it fires, reverse duration, reverse speed, and minimum gap between backoffs | 10–60 / 50–400 / 50–300 / −100..−50 / 100–800 |
 | `RING_SPEED_LED_BRIGHTNESS` | 102 | Brightness (0–255) of the LED-1 drive-speed indicator (40 %) | 0–255 |
 | `TOF_HEALTH_MAX` | 8 | Per-sensor health counter ceiling | — |
 | `TOF_MIN_HEALTHY_SENSORS` | 3 | Fewer ToF sensors *answering* than this → degraded blind spin-search | 1–5 |
-| `EVADE_ESCAPE_MIN_MS` | 15 | FLEE floor: mandatory blind burst | 10–150 |
+| `DEGRADED_PUSH_SPEED_PCT` | 20 | Blind push speed in ATTACK while the bus is degraded, instead of `ATTACK_SPEED_FAR_PCT` | 10–35 |
+| `EVADE_ESCAPE_MIN_MS` | 35 | FLEE floor: mandatory blind reverse burst before the line sensors are allowed to end the flee | 10–150 |
 | `EVADE_FLEE_MAX_MS` | 300 | FLEE ceiling when a sensor will not clear | 150–500 |
-| `EVADE_TURN_MS` | 80 | TURN: pivot duration — the overshoot knob | 30–500 |
+| `EVADE_TURN_MS` | 120 | TURN: pivot duration — the overshoot knob (rotation = this × the pivot speed) | 30–500 |
 | `EVADE_TURN_OUTER_PCT` / `EVADE_TURN_INNER_PCT` / `EVADE_TURN_SPIN_PCT` | 70 / 50 / 60 | TURN pivot speeds: outer wheel forward, inner reversed, both wheels for a rear spin | 30–100 |
 | `EVADE_TOTAL_MAX_MS` | 800 | Safety net for one whole evade program (not a tuning knob) | 500–1500 |
 
@@ -235,13 +235,13 @@ Expected sketch size: ~12.7 KB flash (44 %), ~0.66 KB RAM — verified compiling
 5. When the referee sends start, the pin goes HIGH: the robot runs its opening, then hunts. The ring goes dark for the whole fight — except in a `DEBUG_VERBOSE` build, where it keeps showing the telemetry below.
 6. The referee's stop command drops the pin LOW. The pin is read raw on every loop, so the stop is registered on the very next `stateMachineUpdate()` — motors cut within one loop (~2 ms typical, ~15 ms worst case if a dead ToF sensor has to time out first). The robot then stays frozen, ring solid white, until power cycle, as required.
 
-Ring during the match: **off** (TACTIC/SEARCH/ATTACK/FLANK/BACKOFF/EVADE) — it is blanked once on entering the fight and `FastLED.show()` stops being called, so it costs no loop time and cannot disturb the ToF bus. IDLE = live ToF gradient + white line overlay + speed indicator on LED 1 + green heartbeat. STOP = solid white, latched once.
+Ring during the match: **off** (TACTIC/SEARCH/ATTACK/BACKOFF/EVADE) — it is blanked once on entering the fight and `FastLED.show()` stops being called, so it costs no loop time and cannot disturb the ToF bus. IDLE = live ToF gradient + white line overlay + speed indicator on LED 1 + green heartbeat. STOP = solid white, latched once.
 
 **Debug exception:** with `DEBUG_VERBOSE true` the IDLE telemetry (ToF gradient + line overlay + heartbeat) keeps running through the fight as well, so you can watch what the sensors see while the robot actually drives. It is safe for the ToF bus — `loop()` always finishes the sensor read before the ring update calls `FastLED.show()`. STOP still overrides it with solid white. Set `DEBUG_VERBOSE false` for a real match: that is what makes the ring go dark and silent while fighting, and it is also what disarms the watchdog (§12).
 
 Two details worth knowing while watching that fight-time telemetry:
 
-- In ATTACK and FLANK the firmware polls only the three front ToF sensors (attack scan) to get ~3× faster updates where they matter. The two **side LEDs therefore go blank** during a push. That is deliberate: a reading nobody is refreshing is invalidated on purpose, because the bearing calculation weights readings by inverse distance and one stale close side reading could otherwise outvote all three front sensors.
+- Every ToF sensor is polled on every sweep, in every state. There is no front-only "attack scan" any more: the chase has to be able to turn onto an opponent that is off to a side, and BACKOFF needs the side sensors live. The full five-sensor round-robin costs ~10 ms, which is fast enough for all of it.
 - The line overlay works normally in a fight, which makes EVADE easy to watch: a white LED on the ring is the exact sensor that triggered the escape.
 
 Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy at boot.
@@ -265,17 +265,32 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
 - Indoor testing: set `MOTOR_BENCH_LIMIT_ENABLED` to `true` (default is `false`, i.e. full match power) — that clamps every motor command, evade and openings included.
 
 **Attack aggression (how hard it goes for the opponent)**
-- `ATTACK_SPEED_FAR_PCT` — the speed it charges at from range; the main aggression knob. Raise towards 100 for a full-out charge, lower it if it overshoots the opponent at distance.
-- `ATTACK_CLOSE_DIST_MM` — how far out "full power" begins. Raise it to spend more of the approach flat out.
-- `ATTACK_STEER_GAIN_PCT` — how hard it turns onto the target while pushing. Raise until it weaves/oscillates, then back off.
+- `TARGET_ENGAGE_MM` — **the** aggression/latency knob, and the one to change first. It is the single distance at which SEARCH commits to ATTACK. Lower it and the robot hunts longer before charging (safer, slower to engage); raise it and it starts charging from further out, on a weaker bearing.
+- `ATTACK_SPEED_RAMP` (the table in `Config.h`) — **the** shape of the approach, and the knob to reach for first. Add or move anchors (far → near) to put speed exactly where you want it; the code interpolates linearly between them and clamps outside the first and last. Current profile:
+
+  | closest ToF | base speed |
+  |---|---|
+  | > 300 mm | `SEARCH_SPEED_PCT` (30 %, still SEARCH) |
+  | 300 mm | 35 % |
+  | 250 mm | 40 % |
+  | 200 mm | 45 % |
+  | 150 mm | 53 % |
+  | 100 mm | 60 % |
+  | 80 mm | 80 % |
+  | ≤ 60 mm | 100 % |
+
+  The first anchor's distance is `TARGET_ENGAGE_MM` and its value is `ATTACK_SPEED_FAR_PCT`; the last anchor's distance is `ATTACK_CLOSE_DIST_MM` and its value is `ATTACK_SPEED_CLOSE_PCT`. Moving those four constants moves the endpoints — edit the middle anchors to reshape the curve between them.
+- `ATTACK_STEER_GAIN_PCT` — how hard it turns onto the opponent. Raise until it weaves/oscillates, then back off.
+- `SEARCH_SPEED_PCT` — how fast it hunts, how fast it closes on a far sighting, and how fast it turns onto one (the steering correction is scaled by base speed). 30 % is a compromise: enough to cover the dohyo and keep a usable turn rate while approaching, without carrying so much speed that it arrives at an off-centre opponent before finishing the turn.
 - `PUSH_CONTACT_DIST_MM` / `CONTACT_LATCH_MS` — the head-on collision response: the MIDDLE sensor distance that triggers the full-power both-wheels shove (no steering trim), and how long that commitment sticks if the reading goes invalid (the blade ends up inside the sensor's 9 mm minimum). Raise the distance if it still reacts late on a head-on; the latch only ever *extends* an already-detected shove.
-- `TARGET_ON_AXIS_BAND` / `TARGET_FLANK_BAND` — raised so a slightly off-axis target is pushed and turned onto instead of the robot stopping to pivot. Raise for more aggression, but keep a dead zone (keep `TARGET_FLANK_BAND` ≥ `TARGET_ON_AXIS_BAND` + ~6) or the two states chatter.
 
 **Target tracking (combat turning)**
+- There is only one steering law now — `steerToward()` in `StateMachine.h`, used at both attack and search speed. There is no ATTACK/FLANK threshold to tune or to chatter across, and no state in which the robot pivots on the spot without making forward progress.
 - Tuning, in order of effect:
-  1. `FLANK_TURN_MIN_PCT` / `FLANK_TURN_SPEED_PCT` — the pivot speed at the entry threshold and at \|bearing\| = 100. If it overshoots and sweeps past the opponent, lower `FLANK_TURN_SPEED_PCT`; if it turns onto a far target too slowly, raise it.
-  2. `TARGET_ON_AXIS_BAND` / `TARGET_FLANK_BAND` — the ATTACK/FLANK dead zone (see aggression above).
-- Read the debug table: `Contact=1` means the middle sensor is inside `PUSH_CONTACT_DIST_MM`, i.e. the robot is in a shoving contest.
+  1. `TOF_WEIGHT` (in `Sensors.h`, not `Config.h`) — how hard each sensor asks the robot to turn. The front pair at ±3 commands 75 of the ±100 the side sensors command; set them to ±4 to make a front-corner sighting turn exactly as hard as an alongside one. This is the knob for "it sees it off to a corner but does not come round onto it".
+  2. `ATTACK_STEER_GAIN_PCT` — the turn-in at every speed. If the robot sweeps past the opponent, lower it; if it under-turns and slides by, raise it.
+  3. `TARGET_ENGAGE_MM` — see the aggression section above.
+- Read the debug table: `Contact=1` means the middle sensor is inside `PUSH_CONTACT_DIST_MM`, i.e. the robot is in a shoving contest; `Closest=` is the distance the speed ramp is reading.
 - **If the robot evades or spins while the ring clearly shows the opponent, check the `Edge` row first.** `Edge 1 1 1` on the black interior means the line thresholds are wrong for this surface — see §12.
 
 **Opening timings**
@@ -285,6 +300,7 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
 - If the robot over-corrects and oscillates around the opponent, lower `ATTACK_STEER_GAIN_PCT`; if it drifts off-line while pushing, raise it.
 
 **Evade turn (the edge reflex)**
+- The FLEE phase is the reverse: it runs for at least `EVADE_ESCAPE_MIN_MS` (the blind burst, which is what actually backs the robot off a clipped border) and then for as long as any sensor still reads white, up to `EVADE_FLEE_MAX_MS`. Raise `EVADE_ESCAPE_MIN_MS` if a line clip is registered and then driven straight back over.
 - How far the robot rotates away from an edge is set by `EVADE_TURN_MS` (duration) times the pivot speeds `EVADE_TURN_OUTER_PCT` / `EVADE_TURN_INNER_PCT`. Change the duration first — it is the cleanest knob.
 - Procedure: flash `resources/Edge_Turn_Test`, put the robot on the dohyo with one line sensor just over the white, run one event (`g`, or arm with `a` and nudge the robot over the edge), mark the heading before and after, then scale `EVADE_TURN_MS` by (wanted degrees ÷ measured degrees). Full command list, log format and the numbers-to-constants mapping: **[`resources/Edge_Turn_Test/GUIDE.md`](../resources/Edge_Turn_Test/GUIDE.md)**.
 - Watch the `STILL WHITE: flee is too short` warning in that log. If it appears, the robot started pivoting while still over the white: raise `EVADE_ESCAPE_MIN_MS` or `EVADE_FLEE_MAX_MS` before touching the turn.
@@ -302,7 +318,7 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
 | Robot evades while still on black interior (false edge) | White threshold too high — black reads dip below it | Recalibrate white/black thresholds with `IR_Line_Test` (§10) |
 | No reaction to start signal | Module still latched on from a previous match, or wiring | If the onboard LED blinks rapidly at power-on: ask referee for stop command, then power-cycle. A0 must read LOW before the fight. |
 | Ring frozen / ToF stutter together | `FastLED.show()` interrupt blocking during a sensor read | Keep loop order: sensors → motors → ring (already enforced) |
-| Side ToF LEDs blank (debug ring) while attacking | Attack scan polls only the front trio; unpolled readings are invalidated on purpose | Expected, not a fault (§9) |
+| Robot hunts for a long time before engaging | `TARGET_ENGAGE_MM` is small for the venue, or a ToF sensor is degraded so the closest reading is missing | Raise `TARGET_ENGAGE_MM`; check the `Health=` field in the debug table |
 | Ring solid white and robot unresponsive after a reset | Any reset mid-round is caught by the boot lock — the module still reports fight | Ask the referee for stop, then power-cycle. Unavoidable by design (§13) |
 | Robot restarts every ~250 ms on the bench (motors cut, then boot again) | `DEBUG_VERBOSE` build arms a 250 ms watchdog and something blocked the loop (long serial dump / host stopped reading the port) | Keep the Serial Monitor open, or set `DEBUG_VERBOSE false` and re-flash |
 | Compiles but USB port disappears mid-upload on Leonardo | Known 32U4 USB-resets | Double-tap reset, then upload within the 8 s bootloader window |
@@ -324,14 +340,14 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
 
 - The ICM20602 IMU in the BOM is **not wired in this firmware** (its default I²C pins D2/D3 are unused by the motor driver, but the sensor is still absent from the current wiring; SPI remap possible — open task).
 - **Timer1 belongs to the ToF bus.** `SingleWireSerial` (D4 = `ICP1`) needs Timer1 for bit timing, so `analogWrite()` is dead on D9 and D10 (`OC1A`/`OC1B`). The left motor therefore runs off Timer4 channel B (`OC4B`, which is also on PB6/D10) — see `Motor.h`. Consequences for future work: never call `analogWrite(10, …)`; Timer4 is taken, so D13 (`OC4A`) and D6 (`OC4D`) can't be PWM either; and any library that grabs Timer1 will break either the left motor or the sensor bus. Full timer map and reasoning: **[`TIMERS.md`](TIMERS.md)**.
-- No PID — attack steering is proportional-around-bearing only (a PD on bearing rate is the next tuning step).
+- No PID — the chase steering is a proportional correction on the live bearing only (a PD on bearing rate is the next tuning step).
 - QRE thresholds are fixed at compile time; no on-venue auto-calibration routine yet.
 - Tactic step durations are estimates pending on-dohyo calibration (§11).
 - M60F reads return the last stored value in ~0.75 ms, but under active ranging the sensor MCU can hold the bus for its full sampling budget (reg `0xB0` = 12 ms); `TOF_TIMEOUT_MS` is 15 to cover that. Only one sensor is polled per loop, so a dead sensor bounds the loop at ~15 ms, not 5 × 15 ms.
 - **No watchdog in a match build** (`DEBUG_VERBOSE false`), on purpose: a hung loop keeps the last motor command (which in sumo often still finishes the push) instead of rebooting the robot. Bench builds do arm it at 250 ms — the full reasoning is at the top of `TAXI_Firmware.ino`.
 - **Any reset during a round ends that round.** On the way back up the start module still reads HIGH, so `setup()` hits the boot lock and the robot blinks until someone power-cycles it. That is the same rule that catches a latched-on module before a match, so it is intentional — but it means a brownout or EMI reset has no in-match recovery path.
 - `DEBUG_VERBOSE` builds are not timing-equivalent to match builds: the 400 ms serial table blocks the loop for ~50 ms per dump, sensor readings go correspondingly staler, and the watchdog is armed. Use them to observe, not to tune feel.
-- In ATTACK/FLANK the two side ToF sensors are not polled (attack scan) and are invalidated while unpolled, so no bearing action can be taken on them. If a fight ever needs side coverage, shorten the attack scan or re-enable the full sweep in `sensorsSetAttackScan()`.
+- All five ToF sensors are polled in every state, so a full sweep takes ~10 ms. If a future change needs faster front-sensor updates, the round-robin in `tofReadOne()` is the place to reintroduce a scan mode — but note that BACKOFF and the chase both depend on the side sensors being live.
 
 ---
 

@@ -1,21 +1,15 @@
 stateDiagram-v2
   IDLE --> TACTIC: start signal HIGH (raw read)
   TACTIC --> SEARCH: opening done
-  SEARCH --> ATTACK: opponent front (|bearing| <= 18)
-  SEARCH --> FLANK: opponent off-axis (|bearing| > 26)
-  ATTACK --> FLANK: |bearing| > 26
-  FLANK --> ATTACK: |bearing| <= 18
-  ATTACK --> SEARCH: lost >400ms
-  FLANK --> SEARCH: lost >400ms
+  SEARCH --> ATTACK: opponent inside TARGET_ENGAGE_MM
+  ATTACK --> SEARCH: lost > ATTACK_TARGET_LOST_MS
+  ATTACK --> BACKOFF: side ToF <= 20mm held 350ms
   BACKOFF --> SEARCH: after SIDE_BACKOFF_MS (100ms reverse)
+  TACTIC --> BACKOFF: side ToF <= 20mm held 350ms
+  SEARCH --> BACKOFF: side ToF <= 20mm held 350ms
   EVADE --> SEARCH: after escape
-  TACTIC --> BACKOFF: side ToF <= 30mm held 150ms
-  SEARCH --> BACKOFF: side ToF <= 30mm held 150ms
-  ATTACK --> BACKOFF: side ToF <= 30mm held 150ms
-  FLANK --> BACKOFF: side ToF <= 30mm held 150ms
   SEARCH --> EVADE: line edge
   ATTACK --> EVADE: line edge
-  FLANK --> EVADE: line edge
   BACKOFF --> EVADE: line edge
   TACTIC --> EVADE: line edge
   EVADE --> STOP
@@ -23,7 +17,18 @@ stateDiagram-v2
   TACTIC --> STOP
   SEARCH --> STOP
   ATTACK --> STOP
-  FLANK --> STOP
+  note right of SEARCH
+    Nothing in front closer than
+    TARGET_ENGAGE_MM: runs the DIP-selected
+    pattern at SEARCH_SPEED_PCT, or arcs
+    slowly onto a far sighting.
+  end note
+  note right of ATTACK
+    One steering law (steerToward): speed
+    ramps with distance, turn is scaled by
+    speed, so a hard bearing at attack speed
+    counter-rotates the inner wheel.
+  end note
   note right of STOP
     Highest priority: checked before every
     other rule, on every loop. Terminal --

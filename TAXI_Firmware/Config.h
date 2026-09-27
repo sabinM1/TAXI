@@ -74,16 +74,23 @@
 // 100 = no change. Only ever trim the FASTER side DOWN — duty cannot exceed 255,
 // so there is no headroom to trim a slow side up.
 //
-// Calibrate on the floor: command a straight line, see which way it curves. If it
-// curves LEFT the left side is faster, so step LM_TRIM_PCT down a few points
-// (97, 94, ...) until it tracks straight. 1-3 % is usually enough; the cost is
-// only that the trimmed side's top speed drops by the same few percent.
+// Calibrate on the floor: command a straight line, see which way it curves. The
+// robot turns TOWARD THE SLOWER SIDE, so if it curves LEFT the RIGHT side is
+// doing more work and RM_TRIM_PCT is the knob (and vice versa). Step it down a
+// few points (98, 95, ...) until it tracks straight. 1-3 % is usually enough;
+// the cost is only that the trimmed side's top speed drops by the same few
+// percent.
+//
+// Sanity check for the direction, because it is easy to get backwards: on equal
+// commands a differential drive turns left exactly when the RIGHT wheel covers
+// more ground (v_right - v_left = yaw rate x track width). "Curves left" therefore
+// means the right is faster, not the left.
 //
 // NOTE: the two PWM channels were given the same frequency on purpose (see
 // Motor.h) so this trim only has to cover mechanical differences, not an
 // electrical one.
 #define LM_TRIM_PCT   100   // left  side duty scale (%)
-#define RM_TRIM_PCT   100   // right side duty scale (%)
+#define RM_TRIM_PCT    98   // right side duty scale (%)
 
 // Bench-safety clamp: while true, no motor command exceeds
 // MOTOR_BENCH_MAX_PCT anywhere (attack, evade, tactics included).
@@ -104,7 +111,11 @@
 // This must stay above that budget + margin or a late reply leaks into the
 // next sensor's read (the old "shifted by one" bug). 15 = 12 ms budget + margin.
 #define TOF_TIMEOUT_MS     15
-#define MONITOR_BAUD       115200   // USB Serial debug baud
+#define MONITOR_BAUD       115200   // USB Serial debug baud. NOMINAL ONLY: on the
+                                    // ATmega32U4 Serial is USB CDC, not a UART, so
+                                    // this does not change the transfer rate (the
+                                    // host just uses it to pick a port speed). The
+                                    // real readout-rate knob is DEBUG_DUMP_MS.
 
 // Valid measurement window (sensor config: 9..800 mm). Anything outside
 // (or the no-response sentinel) is treated as "invalid", not as distance.
@@ -149,10 +160,28 @@
 // Disable for matches: the serial table blocks the loop for ~50 ms per dump
 // (USB CDC at 115200), which is wasted time and skews sensor freshness.
 #define DEBUG_VERBOSE     true
+// How often the status table is printed, in ms — the debug READOUT RATE.
+//
+// The table is ~580 bytes, and Serial.print() BLOCKS whenever the 32U4's USB CDC
+// TX buffer (64 B) is full, so each dump costs roughly 5-20 ms of loop time
+// depending on how fast the host drains it. That cost is the floor on this knob:
+// the ToF bus is read ONE sensor per loop (round-robin), so once the dump eats a
+// large share of the loop the full five-sensor sweep stretches out and the
+// printed Bearing/ToF values start describing a moment that has already passed.
+//
+//   Loop= / Sensors= stay accurate at ANY rate — they are sampled in loop()
+//   before debugDump() runs, so the serial cost is excluded from them.
+//
+//   400   the old hard-coded value: 4+ loop ticks between rows, very easy to read
+//   100   4x faster than the old value, still readable, roughly 10 % loop overhead
+//    50   CURRENT: impact-level resolution, ~20-40 % overhead — expect some
+//         staleness between five-sensor sweeps
+//   <50   the serial cost dominates the loop; treat the numbers as indicative
+#define DEBUG_DUMP_MS      50
 #define SEARCH_PATTERN_TIMEOUT_MS  3000   // no opponent for this long in
                                             // SEARCH -> flip search direction
 #define ATTACK_TARGET_LOST_MS      400    // target invisible this long in
-                                            // ATTACK/FLANK -> back to SEARCH
+                                            // ATTACK -> back to SEARCH
 // NOTE: the Start/Stop module deliberately has NO debounce constant here.
 // Its output is a latched, clean logic level (the NanoLabs module stores its
 // state in non-volatile memory), so StateMachine.h reads the pin directly and
@@ -163,28 +192,82 @@
 // COMBAT SPEEDS
 // ============================================================================
 
-// Attack base speed ramps from ATTACK_SPEED_CLOSE_PCT (point-blank) down to
-// ATTACK_SPEED_FAR_PCT (at ATTACK_FAR_DIST_MM), linearly in between.
+// ----- when does the robot commit to the attack? -----------------------------
+// ONE distance decides it, and it is used in two places that must agree:
+//   - SEARCH hands over to ATTACK at/inside TARGET_ENGAGE_MM;
+//   - a sighting at/inside it is also the one the robot TRUSTS and remembers as
+//     "where the opponent was last seen" (see targetBearing()).
+// Farther out the ToF bearing is weak and jumpy, so the robot stays in SEARCH and
+// keeps hunting — turning onto whatever it sees at SEARCH_SPEED_PCT, which is also
+// the speed of the whole approach beyond this distance — instead of committing to
+// a charge on a ghost.
 //
-// Aggression: the whole point is to close the gap the instant the opponent is
-// seen, so the "far" end is deliberately high — a cautious far value let the
-// opponent sit at range while the robot crept at half speed. The full-power zone
-// is also wide (ATTACK_CLOSE_DIST_MM), so the robot spends most of the approach
-// already flat out rather than saving it for the last 150 mm.
-#define ATTACK_SPEED_CLOSE_PCT  100
-#define ATTACK_SPEED_FAR_PCT    75    // push speed at ATTACK_FAR_DIST_MM. 50 was
-                                      // too timid — the robot crawled into the
-                                      // opponent instead of charging it
-#define ATTACK_CLOSE_DIST_MM    200   // <= this: full push (was 150, which left
-                                      // most of the approach at part throttle)
-#define ATTACK_FAR_DIST_MM      400   // >= this: ATTACK_SPEED_FAR_PCT
+// This replaced the old pair of bearing thresholds (TARGET_ON_AXIS_BAND /
+// TARGET_FLANK_BAND) plus the separate LAST_SEEN_MAX_MM: the mode switch is now
+// "how far away is it", not "how far off-axis is it", which is both easier to
+// reason about and impossible to chatter (a distance is monotonic; a bearing
+// bouncing either side of a threshold is not).
+//
+// It is also the FAR anchor of the attack speed ramp below, so the speed the robot
+// approaches at and the distance it is willing to engage from stay one decision.
+//
+// Lower it to make the robot hunt longer before engaging; raise it to commit
+// earlier and from further out.
+#define TARGET_ENGAGE_MM       300
+
+// ----------------------------------------------------------------------------
+// ATTACK SPEED PROFILE
+// ----------------------------------------------------------------------------
+// The base speed as a function of the CLOSEST opponent reading. It is NOT a
+// straight line: it is a small table of (distance, speed) anchors, linearly
+// interpolated between them. The anchors are the shape, so the profile can be
+// whatever is wanted without fighting the code:
+//
+//   closest mm :  >300   300   250   200   150   100    80    60   <60
+//   base speed :    30    35    40    45    52    60    80   100   100
+//                   ^     |                      |     |
+//    SEARCH_SPEED --+     |                      |     +-- ATTACK_CLOSE_DIST_MM:
+//    (hunting; no         |                      |         full power from here in
+//     attack yet)         |                      +-------- 60 % at 100 mm
+//                         +-- ATTACK_SPEED_FAR_PCT at TARGET_ENGAGE_MM
+//                             (the distance SEARCH hands over at)
+//
+// The shape is the whole point. The robot creeps in at a third of its speed
+// while the reading could still be anything, builds speed as the range closes,
+// and only commits everything inside the last 60 mm — where there is no room left
+// to correct and the only thing that matters is the shove. Carrying speed at
+// range is what makes the robot arrive at an off-centre opponent before it has
+// finished turning onto it, sail past and have to re-acquire.
+//
+// The last anchor deliberately coincides with PUSH_CONTACT_DIST_MM, so the speed
+// is already at PUSH_CONTACT_SPEED_PCT when the contact latch takes over: no step
+// in the command at the moment of impact.
+//
+// 250 mm is not listed as an anchor because it falls on the 300 -> 200 segment
+// anyway (35 -> 45 passes through 40 there). Add anchors, in FAR -> NEAR order,
+// to reshape any part of the curve.
+#define ATTACK_SPEED_CLOSE_PCT  100   // anchor value at ATTACK_CLOSE_DIST_MM
+#define ATTACK_SPEED_FAR_PCT     35   // anchor value at TARGET_ENGAGE_MM, and
+                                      // the blind push speed when nothing is
+                                      // visible at all
+#define ATTACK_CLOSE_DIST_MM     60   // full power from here in
+
+// Anchors must be ordered far -> near (non-increasing mm).
+static const struct AttackSpeedPoint { uint16_t mm; uint8_t pct; } ATTACK_SPEED_RAMP[] = {
+  { TARGET_ENGAGE_MM,     ATTACK_SPEED_FAR_PCT   },   // 300 mm -> 35 %
+  { 200,                  45                    },
+  { 100,                  60                    },
+  { ATTACK_CLOSE_DIST_MM, ATTACK_SPEED_CLOSE_PCT },   //  60 mm -> 100 %
+};
+#define ATTACK_SPEED_RAMP_POINTS \
+  (sizeof(ATTACK_SPEED_RAMP) / sizeof(ATTACK_SPEED_RAMP[0]))
 
 // Blade-to-blade contact. The MIDDLE ToF (id 3, looking straight ahead) reading
 // this close means the opponent is on the blade. From there both wheels go to
 // PUSH_CONTACT_SPEED_PCT straight ahead and the steering trim is skipped: a
 // pushing contest is won by whoever still has both wheels driving, and at that
-// range a correction would only give one of them away. It also outranks the
-// switch to FLANK — contact is worth more than re-centering first.
+// range a correction would only give one of them away. It outranks everything
+// else in ST_ATTACK — contact is worth more than re-centering first.
 //
 // DISTANCE is deliberately generous rather than 30 mm. A single M60F reading can
 // be up to its 12 ms sampling budget old, and at impact the blade goes inside the
@@ -198,58 +281,65 @@
 // minimum range) — a shove must not be interrupted by one bad frame. This is what
 // makes the robot commit instantly on a head-on instead of hesitating mid-push.
 #define CONTACT_LATCH_MS        250
-#define ATTACK_STEER_GAIN_PCT  100    // % of base speed applied as full
-                                      // differential at bearing = +/-100.
-                                      // Higher = steers onto the opponent harder
-                                      // while pushing (+25% aggression: 85 -> 100,
-                                      // capped). Lower it if the robot
-                                      // weaves/oscillates while shoving.
 
-// ----- which way the robot thinks the opponent is ---------------------------
-// Bearing units, the scale of sensorsOpponent(): -100 hard left, 0 dead ahead,
-// +100 hard right.
+// STRAIGHTEN BEFORE IMPACT — the anti-lever fix.
 //
-// ATTACK (push, steering with the gain above) and FLANK (pivot to re-center) are
-// separated by TWO thresholds, not one. With a single threshold the command
-// jumped from "a ~10% differential" to "a full pivot" the moment the bearing
-// crossed it, so one extra sensor lighting up was enough to spin the robot over a
-// target that was nearly straight ahead. The dead zone between the two numbers
-// removes that cliff and stops the two states chattering.
-#define TARGET_ON_AXIS_BAND     18   // |bearing| <= this -> ATTACK
-#define TARGET_FLANK_BAND       26   // |bearing| >  this -> FLANK
-                                     // in between: stay in the state we are in
-                                     //
-                                     // Widened from 15/22 for aggression: a target
-                                     // that is slightly off-axis now gets PUSHED
-                                     // and turned onto (ATTACK steers hard with the
-                                     // gain above) instead of the robot stopping to
-                                     // pivot. FLANK is kept only for targets that are
-                                     // really off to the side.
-
-// ----- last-seen target direction -------------------------------------------
-// The robot remembers the direction the opponent was last seen in and uses it
-// whenever the live picture is only "far away or nothing": the search then turns
-// that way instead of running blind.
+// A blade that arrives mid-turn hits with a corner, and a corner is exactly what
+// the opponent's wedge gets its leading edge under. The steering law is
+// proportional-only, so it keeps correcting right up to contact, and whatever yaw
+// rate the robot has at 60 mm it still has at impact.
 //
-// This is NOT a filter. A live close sighting always wins outright, so it cannot
-// lag a pivot the way the old bearing memory did.
-#define LAST_SEEN_MAX_MM       350   // a sighting counts as "seen" at/inside this
-                                     // distance; farther readings are treated as
-                                     // "no usable direction" and the remembered
-                                     // one is used instead
+// So inside STRAIGHTEN_DIST_MM the steering correction is faded out linearly,
+// reaching zero at PUSH_CONTACT_DIST_MM, which lets the yaw rate decay and the
+// plow land square. Only the MIDDLE ToF arms the taper: its 18-22 degree cone is
+// narrower than the steering dead zone, so a target it can see at this range is
+// already effectively dead ahead, and anything off to a side does not arm it — a
+// target being turned onto is never abandoned mid-turn.
+//
+// Deliberately a SEPARATE constant from PUSH_CONTACT_DIST_MM rather than just
+// raising that one: PUSH_CONTACT_DIST_MM is also the near anchor of
+// ATTACK_SPEED_RAMP, so moving it would jump the base speed from ~53 % to 100 %
+// 60 mm earlier as well as giving up the steering earlier. Here the speed ramp is
+// untouched, so the robot still accelerates into the shove while it straightens.
+//
+// Lower it to keep steering deeper into the engagement; raise it to straighten
+// sooner (and give up more last-instant correction).
+#define STRAIGHTEN_DIST_MM     120
 
-#define SEARCH_SPEED_PCT        20    // base speed of all search patterns
-#define FLANK_TURN_SPEED_PCT   100    // pivot speed at |bearing| = 100 (inner
-                                      // wheel counterspins at half this).
-                                      // +25% aggression: 90 -> 112.5, capped
-#define FLANK_TURN_MIN_PCT      56    // pivot speed at the FLANK entry threshold
-                                      // (+25% aggression: 45 -> 56),
-                                      // scaled linearly up to FLANK_TURN_SPEED_PCT
-                                      // above it: full power for a big correction,
-                                      // a nudge for a small one. One value for both
-                                      // meant every entry pivoted flat out and
-                                      // overshot the target. Raised from 35 along
-                                      // with the max for a quicker re-centering.
+// How hard the robot turns onto the opponent while chasing. The differential
+// applied at bearing +/-100 is this many percent of the CURRENT BASE SPEED (not
+// a fixed pivot rate). Scaling the correction by the speed is what lets one law
+// do both jobs:
+//   - at attack speed (35..100 %) a hard bearing counter-rotates the inner wheel
+//     and swings the robot round onto the target;
+//   - at the slow search/approach speed the exact same bearing is only a gentle
+//     arc, so the robot never stalls or spins on the spot while hunting.
+// That is why the separate ATTACK (arc) and FLANK (pivot) states are gone: there
+// is no longer a bearing threshold at which the robot stops making forward
+// progress. See steerToward() in StateMachine.h.
+//
+// 100 means the correction at full bearing exactly cancels the base speed: the
+// inner wheel stops but never reverses, which is the slowest possible pivoting
+// turn. That is why the robot was still rotating when it reached the opponent —
+// it had the authority of a stopped wheel and the whole approach to use it. 120
+// pushes the inner wheel into a mild counter-rotation at full bearing while
+// leaving small corrections proportional, so the turn-in finishes during the
+// approach instead of during the impact.
+//
+// Raise it further for a tighter turn-in, until the robot weaves or oscillates —
+// with a proportional-only law and no smoothing, oscillation is the failure mode.
+// Step it up ~20 at a time and re-test; the next step from here is 140.
+#define ATTACK_STEER_GAIN_PCT  120
+
+#define SEARCH_SPEED_PCT        30   // base speed of every search pattern, and of
+                                     // the approach leg when a far sighting is
+                                     // being turned onto — i.e. the speed
+                                     // everywhere outside TARGET_ENGAGE_MM. Fast
+                                     // enough to cover the dohyo and to have a
+                                     // real turn rate (the steering correction is
+                                     // scaled by this), slow enough not to
+                                     // overshoot a target it has not finished
+                                     // turning onto yet.
 #define EVADE_REVERSE_SPEED_PCT -80   // escape burst away from an edge
 
 // ============================================================================
@@ -263,15 +353,25 @@
 // robot reverses hard for a moment to open the gap, then hands back to SEARCH,
 // which turns to bring the opponent onto the front sensors.
 //
-// NOTE: this can only fire while the sides are actually being polled. In ATTACK
-// the ToF scan is narrowed to the front trio (sensorsSetAttackScan), so it
-// triggers from SEARCH / FLANK / TACTIC.
-#define SIDE_BACKOFF_DIST_MM      30   // side ToF distance that triggers the reverse
-#define SIDE_BACKOFF_CONFIRM_MS  150   // the side reading must HOLD at/inside
+// NOTE: the sides are always polled (there is no front-only scan any more), so
+// this is free to fire from ANY state, ATTACK included.
+#define SIDE_BACKOFF_DIST_MM      20   // side ToF distance that triggers the
+                                       // reverse. Tightened from 30 mm: the side
+                                       // sensors are perpendicular, so a slightly
+                                       // angled opponent (or a dohyo wall) can
+                                       // cross their 30 mm band without ever
+                                       // being alongside. 20 mm means "alongside
+                                       // and touching", which is the only case
+                                       // this state exists for.
+#define SIDE_BACKOFF_CONFIRM_MS  350   // the side reading must HOLD at/inside
                                        // DIST_MM for this long before the reverse
                                        // fires — one grazing frame or a stale
                                        // reading must not trigger it. Cleared the
                                        // moment the reading goes back out.
+                                       // Long (350 ms) on purpose: the reverse is
+                                       // a full-power move away from the opponent,
+                                       // so it must only ever fire on sustained
+                                       // contact, never on a brush past the sensor.
 #define SIDE_BACKOFF_MS          100   // reverse duration (the "temporary" part)
 #define SIDE_BACKOFF_SPEED_PCT  -100   // full-speed reverse
 #define SIDE_BACKOFF_COOLDOWN_MS 300   // minimum gap between backoffs, so a target
@@ -304,6 +404,12 @@
                                       // "Answering", not "seeing something": a
                                       // sensor with no object in range is still
                                       // healthy. See tofReadOne().
+#define DEGRADED_PUSH_SPEED_PCT  20   // blind push speed in ATTACK while the bus
+                                      // is degraded (below), instead of the normal
+                                      // ATTACK_SPEED_FAR_PCT. Deliberately the
+                                      // slowest number in the file: the robot is
+                                      // blind AND the target has been lost, so it
+                                      // only creeps forward on momentum.
 
 // ============================================================================
 // EVADE TIMING
@@ -312,22 +418,32 @@
 // One evade program is FLEE -> TURN -> hand over to SEARCH. Both phases are
 // timed, so the same edge always produces the same escape. See evadeUpdate().
 
-#define EVADE_ESCAPE_MIN_MS   15    // FLEE floor: the mandatory blind burst.
-                                    // Short on purpose — it only exists so one
-                                    // flickering sample cannot end the flee. The
-                                    // moment the sensors read black the phase ends
-                                    // anyway, so a small floor means the robot
-                                    // turns as soon as it is actually clear.
+#define EVADE_ESCAPE_MIN_MS   35    // FLEE floor: the mandatory blind reverse
+                                    // burst, executed before the robot is allowed
+                                    // to look at the line sensors again. It is
+                                    // what guarantees a line clip actually gets
+                                    // backed away from instead of just being
+                                    // twitched clear — a very short floor let the
+                                    // robot clip the border, register it, and
+                                    // drive straight back over the same spot.
+                                    // Long enough to move a real distance at
+                                    // EVADE_REVERSE_SPEED_PCT (~15 mm), short
+                                    // enough that it cannot carry the robot off
+                                    // the dohyo on its own.
                                     // Tuned on the robot with Edge_Turn_Test.
 #define EVADE_FLEE_MAX_MS     300   // FLEE ceiling: once this long has passed
                                     // with a sensor STILL reading white, stop
                                     // fleeing anyway — that run cannot be
                                     // measured, and pivoting over white would be
                                     // pivoting along the edge.
-#define EVADE_TURN_MS         80    // *** OVERSHOOT KNOB *** duration of the
-                                    // pivot away from the edge. Tuned on the
-                                    // robot with resources/Edge_Turn_Test
-                                    // (see its GUIDE).
+#define EVADE_TURN_MS        120    // *** OVERSHOOT KNOB *** duration of the
+                                    // pivot away from the edge, i.e. how far the
+                                    // robot rotates: angle = this x the pivot
+                                    // rate below. Raised so the robot is left
+                                    // pointing decisively back into the ring
+                                    // instead of marginally off the border.
+                                    // Tuned on the robot with
+                                    // resources/Edge_Turn_Test (see its GUIDE).
 // Pivot speeds used by the TURN phase (evadeTurnAway()). These set the pivot
 // RATE; together with EVADE_TURN_MS they set how far the robot rotates.
 #define EVADE_TURN_OUTER_PCT   70   // outer wheel, forward

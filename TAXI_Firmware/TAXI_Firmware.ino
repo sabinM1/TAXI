@@ -58,7 +58,7 @@ static void renderToFGradient() {
 // Ring behaviour, driven by the state machine:
 //   IDLE  — live pit telemetry: 5-sensor ToF green->red gradient + white line
 //           overlay + green heartbeat on the centre LED, refreshed every 50 ms.
-//   FIGHT — ring is OFF (TACTIC/SEARCH/ATTACK/FLANK/EVADE). It is blanked once
+//   FIGHT — ring is OFF (TACTIC/SEARCH/ATTACK/BACKOFF/EVADE). It is blanked once
 //           and FastLED.show() stops being called, so the WS2812 bit-bang never
 //           steals loop time or interrupts the ToF bus while fighting.
 //           EXCEPTION — DEBUG_VERBOSE builds keep the exact IDLE telemetry
@@ -132,7 +132,7 @@ static void ringStatusUpdate() {
 }
 
 // ============================= DEBUG TELEMETRY =============================
-// Prints a labelled table every 400 ms when DEBUG_VERBOSE is on.
+// Prints a labelled table every DEBUG_DUMP_MS (Config.h) when DEBUG_VERBOSE is on.
 // ToF values are the normalised millimetre distances in tofMm[]; "---"
 // marks a sensor with no valid reading this pass.
 
@@ -161,7 +161,7 @@ static void tofCell(uint8_t i) {
 
 static void debugDump() {
   static uint32_t last = 0;
-  if (millis() - last < 400) return;
+  if (millis() - last < DEBUG_DUMP_MS) return;
   last = millis();
 
   int l, r; motorsGetLast(&l, &r);

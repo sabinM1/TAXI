@@ -1,26 +1,31 @@
 /*
  * StateMachine.h — combat flow.
  *
- * States:  IDLE -> TACTIC -> SEARCH <-> ATTACK/FLANK, with EVADE override
- *          from any combat state, and STOP when the Start/Stop module drops.
+ * States:  IDLE -> TACTIC -> SEARCH -> ATTACK, with EVADE and BACKOFF as
+ *          overrides from any combat state, and STOP when Start/Stop drops.
  *
- * ATTACK vs FLANK — both mean "the opponent is on a ToF sensor", they only
- * differ in how far off-axis it is (split at +/-TARGET_ON_AXIS_BAND bearing
- * units, see Config.h):
- *   ATTACK  target is roughly ahead -> ram it. Speed comes from the distance
- *           (fast up close, cautious far), steering is a smooth proportional
- *           correction (see attackUpdate()).
- *   FLANK   target is off to a side -> bang-bang pivot at a fixed speed until
- *           it is back in front, then hand over to ATTACK (see flankUpdate()).
- *           It is a re-centering turn, not an orbit around the opponent.
- * SEARCH picks the right one on sight; the two also swap automatically while
- * fighting if the bearing drifts in or out of the band.
+ * SEARCH vs ATTACK — the ONLY thing that separates them is how far away the
+ * opponent is (Config: TARGET_ENGAGE_MM):
+ *   SEARCH  nothing close enough to commit to. Runs the DIP-selected search
+ *           pattern at SEARCH_SPEED_PCT, and if a far sighting turns up, arcs
+ *           slowly onto it instead of running the pattern blind. It never
+ *           charges on a distance reading it cannot trust.
+ *   ATTACK  the opponent is inside TARGET_ENGAGE_MM -> drive through it. Speed
+ *           ramps with distance, steering is one proportional correction
+ *           (steerToward()).
+ *
+ * There is no separate "pivot to re-center" state any more. The correction is
+ * scaled by the base speed, so a hard bearing at attack speed already
+ * counter-rotates the inner wheel and swings the robot round, while the same
+ * bearing at search speed is only a gentle arc. One law, no threshold to
+ * chatter across, and never a moment where the robot pivots in place without
+ * making progress (which is how the old FLANK state used to lose a target).
  *
  * Start module (A0, INPUT_PULLUP): HIGH = fight, LOW = armed/stopped
  * (NanoLabs module, active-high per official docs; the Full_Robot_Test
  * sketch guessed the opposite polarity — it was wrong).
  *
- * Priority each loop: stop signal > evade > track (attack/flank) > search.
+ * Priority each loop: stop signal > evade > side backoff > state body.
  */
 #ifndef STATEMACHINE_H
 #define STATEMACHINE_H
@@ -31,7 +36,7 @@
 #include "Sensors.h"
 #include "Strategies.h"
 
-enum RobotState : uint8_t { ST_IDLE, ST_TACTIC, ST_SEARCH, ST_ATTACK, ST_FLANK, ST_BACKOFF, ST_EVADE, ST_STOP };
+enum RobotState : uint8_t { ST_IDLE, ST_TACTIC, ST_SEARCH, ST_ATTACK, ST_BACKOFF, ST_EVADE, ST_STOP };
 static RobotState state = ST_IDLE;
 
 // Start/stop signal latch. The NanoLabs module holds its state in
@@ -89,7 +94,6 @@ static const char* stateName(RobotState s) {
     case ST_TACTIC: return "TACTIC";
     case ST_SEARCH: return "SEARCH";
     case ST_ATTACK: return "ATTACK";
-    case ST_FLANK:  return "FLANK";
     case ST_BACKOFF: return "BACKOFF";
     case ST_EVADE:  return "EVADE";
     case ST_STOP:   return "STOP";
@@ -132,20 +136,20 @@ static void startModuleUpdate() {
 // ------------- target bearing + last-seen direction -------------------------
 
 // Direction the opponent was last seen in: a LIVE sighting at/inside
-// LAST_SEEN_MAX_MM. Used whenever the sensors have only a far or empty picture.
+// TARGET_ENGAGE_MM. Used whenever the sensors have only a far or empty picture.
 // This is NOT a filter — a close reading always wins outright, so it can never
 // lag a pivot the way the old bearing memory did.
 static int8_t lastSeenBearing = 0;
 static bool   lastSeenValid   = false;
 // Did the most recent targetBearing() call have an actual sensor reading (however
 // far)? Distinguishes "steering on a live reading" from "steering on the memory"
-// — only the former may hold ATTACK/FLANK against the lost-target timeout.
+// — only the former may hold ATTACK against the lost-target timeout.
 static bool   bearingRawSeen = false;
 
 /**
  * The bearing the robot steers on.
  *
- *   close sighting (<= LAST_SEEN_MAX_MM) -> the live reading, and it becomes the
+ *   close sighting (<= TARGET_ENGAGE_MM) -> the live reading, and it becomes the
  *                                           remembered direction
  *   far sighting, or nothing             -> the remembered direction, if any
  *   nothing remembered yet               -> the far reading as-is, or 127
@@ -155,8 +159,9 @@ static bool   bearingRawSeen = false;
  * bet than on a faint far reading.
  *
  * No smoothing anywhere: a lagging bearing makes the robot keep pivoting after it
- * has already swept past the opponent. Chatter at the band edges is handled by
- * the ATTACK/FLANK hysteresis bands, not by filtering the bearing.
+ * has already swept past the opponent, and with the correction scaled by the base
+ * speed the steering is smooth by construction — there is no band edge to chatter
+ * across.
  *
  * 127 ("nothing visible") is only returned when there is no memory to fall back on.
  */
@@ -166,7 +171,7 @@ static int8_t targetBearing() {
   bearingRawSeen = (raw != 127);
 
   // Close enough to be a real, trustworthy sighting: remember it, steer on it.
-  if (raw != 127 && ok && mm <= LAST_SEEN_MAX_MM) {
+  if (raw != 127 && ok && mm <= TARGET_ENGAGE_MM) {
     lastSeenBearing = raw;
     lastSeenValid   = true;
     return raw;
@@ -256,69 +261,99 @@ static void searchUpdate(SearchStyle style) {
 }
 
 /**
- * Base push speed for the attack: full power at ATTACK_CLOSE_DIST_MM,
- * tapering linearly to ATTACK_SPEED_FAR_PCT at ATTACK_FAR_DIST_MM.
- * Falls back to the far speed when the closest reading is invalid.
+ * Base push speed for the attack, read out of the ATTACK_SPEED_RAMP table in
+ * Config.h and linearly interpolated between its anchors.
+ *
+ * The window runs from ATTACK_SPEED_FAR_PCT at TARGET_ENGAGE_MM (the distance the
+ * robot commits from) up to ATTACK_SPEED_CLOSE_PCT at ATTACK_CLOSE_DIST_MM, flat
+ * outside it. It is the TABLE, not a single slope, that shapes the approach: slow
+ * while the reading could still be anything, speed building as the range closes,
+ * everything inside the last ATTACK_CLOSE_DIST_MM. See the table's comment.
+ *
+ * Falls back to the far value (the ramp's first anchor) when the closest reading
+ * is invalid — which is also the speed used for the blind push.
  */
 static int attackBaseSpeed(uint16_t mm, bool ok) {
-  if (!ok || mm >= ATTACK_FAR_DIST_MM) return ATTACK_SPEED_FAR_PCT;
-  if (mm <= ATTACK_CLOSE_DIST_MM)      return ATTACK_SPEED_CLOSE_PCT;
-  return (int)map((long)mm, ATTACK_CLOSE_DIST_MM, ATTACK_FAR_DIST_MM,
-                  ATTACK_SPEED_CLOSE_PCT, ATTACK_SPEED_FAR_PCT);
+  if (!ok || mm >= ATTACK_SPEED_RAMP[0].mm) return ATTACK_SPEED_RAMP[0].pct;
+
+  // Anchors run far -> near. Find the segment this distance falls in and
+  // interpolate between that anchor and the one before it (farther, slower).
+  for (uint8_t i = 1; i < ATTACK_SPEED_RAMP_POINTS; i++) {
+    if (mm < ATTACK_SPEED_RAMP[i].mm) continue;
+    return (int)map((long)mm,
+                    ATTACK_SPEED_RAMP[i].mm,     ATTACK_SPEED_RAMP[i - 1].mm,
+                    ATTACK_SPEED_RAMP[i].pct,    ATTACK_SPEED_RAMP[i - 1].pct);
+  }
+  return ATTACK_SPEED_RAMP[ATTACK_SPEED_RAMP_POINTS - 1].pct;   // closest zone
 }
 
 /**
- * Chase + push. Used while the opponent is centred (|bearing| <= TARGET_ON_AXIS_BAND).
- * Speed: attackBaseSpeed() tapers with distance — full power at
- * ATTACK_CLOSE_DIST_MM, ATTACK_SPEED_FAR_PCT at ATTACK_FAR_DIST_MM.
- * Steering: one smooth proportional term — bearing > 0 (opponent to the
- * right) slows the right motor and vice-versa, scaled by ATTACK_STEER_GAIN_PCT.
- * Stamps lastSeenMs only while there is an actual reading, so steering on a
- * remembered direction cannot hold the robot in ATTACK forever.
+ * The one steering law — used by the attack, and by SEARCH's approach leg.
  *
- * NOT used at blade contact: the ST_ATTACK body intercepts that case first, so
- * this always runs with at least some standoff (see PUSH_CONTACT_DIST_MM).
+ * Both wheels drive forward at `base`; a differential proportional to
+ * `bearing` is then shifted between them:
+ *
+ *   bearing > 0  opponent to the right -> right wheel slows, left speeds up
+ *   bearing < 0  opponent to the left  -> mirrored
+ *   bearing = 0  dead ahead            -> both wheels equal, straight line
+ *
+ * The correction scales with BOTH the bearing and `base` (via
+ * ATTACK_STEER_GAIN_PCT), which is what lets this single function replace the
+ * old attack-steer + flank-pivot pair: at attack speed a full bearing swings the
+ * robot round onto the target, while at SEARCH_SPEED_PCT the same bearing is only
+ * a gentle arc. Because the outer wheel is always driving forward, the robot
+ * never stalls or spins in place while trying to line up.
+ *
+ * `gainPct` is the steering authority at full bearing, as a percent of `base`
+ * (see ATTACK_STEER_GAIN_PCT); it defaults to the configured value. ST_ATTACK
+ * passes a REDUCED gain close in, to let the yaw settle before the blade lands —
+ * see straightenGainPct(). SEARCH's approach leg always uses the default.
+ *
+ * What the gain means for the inner wheel: at gain 100 a full bearing stops it
+ * (corr == base); the counter-rotation that swings the robot round onto the
+ * target only starts once the gain is above 100.
+ *
+ * bearing = 127 (nothing visible) is not a direction: it drives straight.
+ * `base` is expected >= 0; both outputs are clamped to -100..100.
  */
-static void attackUpdate() {
-  int8_t bearing = targetBearing();
-  bool ok; uint16_t mm = sensorsClosestMm(&ok);
-  if (bearingRawSeen) lastSeenMs = millis();
-
-  int base = attackBaseSpeed(mm, ok);
-
-  // Proportional steer: bearing >0 = opponent right -> slow right motor.
-  int corr = (int)((int32_t)bearing * base * ATTACK_STEER_GAIN_PCT / 10000);
+static void steerToward(int base, int8_t bearing, int gainPct = ATTACK_STEER_GAIN_PCT) {
+  if (bearing == 127) { motorsSet(base, base); return; }
+  int corr = (int)((int32_t)bearing * base * gainPct / 10000);
   motorsSet(constrain(base + corr, -100, 100),
             constrain(base - corr, -100, 100));
 }
 
 /**
- * Re-centering pivot. Used while the opponent is off-axis
- * (|bearing| > TARGET_FLANK_BAND), i.e. only a side or outer front sensor has it.
+ * Steering authority for the chase at the current range, faded out over the last
+ * stretch so the blade arrives square instead of mid-turn. See
+ * STRAIGHTEN_DIST_MM in Config.h for why this exists and why it is a separate
+ * distance from the contact latch.
  *
- * The pivot speed scales with how far off-axis the target is: a nudge at the
- * entry threshold, a full FLANK_TURN_SPEED_PCT at |bearing| = 100, the inner wheel
- * counterspinning at half of that. Bang-bang (one speed for every bearing) is why
- * a target barely outside the band got the same full-scale pivot as one 90 degrees
- * off, which overshot and then lost it.
- *
- * 127 means lost — do nothing and let the caller's timeout drop us back to SEARCH.
- * Unlike ATTACK this never pushes blind: a pivot in the wrong direction is worse
- * than standing still.
+ * Only the MIDDLE sensor arms the taper, and that is the safety property, not an
+ * implementation detail: the M60F's 18-22 degree cone is narrower than the
+ * steering dead zone, so if the middle sensor can see the opponent at this range
+ * then the opponent really is in front of the blade. A target being turned onto
+ * from a corner never arms it, so it always keeps the full correction and is
+ * never abandoned halfway through the turn.
  */
-static void flankUpdate() {
-  int8_t bearing = targetBearing();
-  if (bearing == 127) return;
-  if (bearingRawSeen) lastSeenMs = millis();
+static int straightenGainPct() {
+  if (!tofValid[2] || tofMm[2] >= STRAIGHTEN_DIST_MM) return ATTACK_STEER_GAIN_PCT;
+  if (tofMm[2] <= PUSH_CONTACT_DIST_MM) return 0;
+  return (int)map((long)tofMm[2], PUSH_CONTACT_DIST_MM, STRAIGHTEN_DIST_MM,
+                  0, ATTACK_STEER_GAIN_PCT);
+}
 
-  uint8_t mag = (uint8_t)abs((int)bearing);          // 1..100
-  uint8_t outer = (uint8_t)constrain(map((long)mag, TARGET_ON_AXIS_BAND, 100,
-                                         FLANK_TURN_MIN_PCT, FLANK_TURN_SPEED_PCT),
-                                     FLANK_TURN_MIN_PCT, FLANK_TURN_SPEED_PCT);
-  uint8_t inner = outer / 2;                         // counterspin, as before
-
-  if (bearing > 0) motorsSet(outer, -inner);
-  else             motorsSet(-inner, outer);
+/**
+ * One loop-tick of the chase (ST_ATTACK body). Speed from the closest reading,
+ * steering from `bearing` — passed in rather than re-fetched, so the caller can
+ * stamp lastSeenMs from the same sample it is acting on.
+ *
+ * NOT used at blade contact: the ST_ATTACK body intercepts that case first, so
+ * this always runs with at least some standoff (see PUSH_CONTACT_DIST_MM).
+ */
+static void attackUpdate(int8_t bearing) {
+  bool ok; uint16_t mm = sensorsClosestMm(&ok);
+  steerToward(attackBaseSpeed(mm, ok), bearing, straightenGainPct());
 }
 
 /**
@@ -505,12 +540,11 @@ void stateMachineUpdate() {
   // visible target is always acted on, no matter what this says.
   bool degraded = sensorsHealthyCount() < TOF_MIN_HEALTHY_SENSORS;
 
-  // ToF front-priority scan only while pushing. FLANK deliberately keeps the
-  // full round-robin: it exists to chase a target that is off to the side, so it
-  // needs the side sensors live — capping it to the front trio would leave it
-  // blind to the very reading that sent it there. Same for BACKOFF, which must
-  // keep watching the sides it is escaping from.
-  sensorsSetAttackScan(state == ST_ATTACK);
+  // Every ToF sensor is polled on every sweep, in every state — there is no
+  // front-only scan any more. The chase needs to be able to turn onto an opponent
+  // that is off to a side, and BACKOFF needs the side sensors live, so narrowing
+  // the sweep to the front trio would blind the robot to the very readings it acts
+  // on. A full five-sensor round-robin is ~10 ms, fast enough for all of it.
 
   switch (state) {
     case ST_IDLE:
@@ -532,17 +566,27 @@ void stateMachineUpdate() {
       break;
 
     case ST_SEARCH: {
-      // Engagement uses the RAW reading, at any range: a visible opponent must be
-      // chased, so this deliberately does NOT go through targetBearing() — that
-      // prefers the remembered direction, and a stale guess must never start an
-      // attack. The memory only steers once an attack is underway.
+      // The RAW reading, at any range: a visible opponent must be chased, so this
+      // deliberately does NOT go through targetBearing() — that prefers the
+      // remembered direction, and a stale guess must never start an attack.
       int8_t sighted = sensorsOpponent();
+
       if (sighted != 127) {
         lastSeenMs = millis();
-        gotoState((sighted >= -TARGET_ON_AXIS_BAND && sighted <= TARGET_ON_AXIS_BAND)
-                      ? ST_ATTACK : ST_FLANK);
+        bool ok; uint16_t mm = sensorsClosestMm(&ok);
+
+        if (ok && mm <= TARGET_ENGAGE_MM) {
+          // Close enough to commit: drive through it.
+          gotoState(ST_ATTACK);
+          break;
+        }
+        // Visible but still outside the engagement range: turn slowly onto it and
+        // close in, so a distant sighting is not lost without committing to a
+        // charge on a bearing that is not trustworthy yet.
+        steerToward(SEARCH_SPEED_PCT, sighted);
         break;
       }
+
       // Nothing visible. If too many ToF sensors are not answering, blind spin is
       // the safest way to stumble back onto the opponent and it can never drive
       // off the dohyo. Otherwise run the selected search pattern — whose first leg
@@ -557,10 +601,10 @@ void stateMachineUpdate() {
 
     case ST_ATTACK: {
       // Blade contact beats everything else in this state: both wheels full
-      // ahead, no steering trim, and no switch to FLANK. lastSeenMs is stamped
-      // because the opponent is very much visible — without it the lost-target
-      // timeout would eventually pull the robot out of its own shove. Latched
-      // (targetInContact) so one invalid frame at impact cannot break the shove.
+      // ahead, no steering trim, no turn-in. lastSeenMs is stamped because the
+      // opponent is very much visible — without it the lost-target timeout would
+      // eventually pull the robot out of its own shove. Latched (targetInContact)
+      // so one invalid frame at impact cannot break the shove.
       if (targetInContact()) {
         motorsSet(PUSH_CONTACT_SPEED_PCT, PUSH_CONTACT_SPEED_PCT);
         lastSeenMs = millis();
@@ -568,42 +612,19 @@ void stateMachineUpdate() {
       }
 
       int8_t bearing = targetBearing();
-      bool lost = (millis() - lastSeenMs) > ATTACK_TARGET_LOST_MS;
+      if (bearingRawSeen) lastSeenMs = millis();
 
-      if (lost) {
+      if ((millis() - lastSeenMs) > ATTACK_TARGET_LOST_MS) {
         // No LIVE sighting for the whole grace window, so the bearing (if any) is
         // only a remembered direction: stop attacking on it and go search.
         gotoState(ST_SEARCH); enterSearch();
       } else if (bearing == 127) {
         // Push on blind momentum. Degraded means too few sensors are ANSWERING,
         // so keep it deliberately cautious.
-        int push = degraded ? 40 : attackBaseSpeed(0xFFFF, false);
+        int push = degraded ? DEGRADED_PUSH_SPEED_PCT : ATTACK_SPEED_FAR_PCT;
         motorsSet(push, push);
-      } else if (bearing < -TARGET_FLANK_BAND || bearing > TARGET_FLANK_BAND) {
-        // Off by more than the outer threshold: pivot to re-center. Anything
-        // inside TARGET_FLANK_BAND stays in ATTACK (that dead zone is the
-        // hysteresis against FLANK).
-        gotoState(ST_FLANK);
       } else {
-        attackUpdate();
-      }
-      break;
-    }
-
-    case ST_FLANK: {
-      int8_t bearing = targetBearing();
-      bool lost = (millis() - lastSeenMs) > ATTACK_TARGET_LOST_MS;
-
-      if (lost) {
-        // Memory-only pivot would otherwise never end (a remembered bearing does
-        // not shrink as the robot turns). Bound it and go search.
-        gotoState(ST_SEARCH); enterSearch();
-      } else if (bearing == 127) {
-        motorsStop();
-      } else if (bearing >= -TARGET_ON_AXIS_BAND && bearing <= TARGET_ON_AXIS_BAND) {
-        gotoState(ST_ATTACK);
-      } else {
-        flankUpdate();
+        attackUpdate(bearing);
       }
       break;
     }
