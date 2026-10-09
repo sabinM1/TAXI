@@ -56,11 +56,11 @@ check("slot 0 = Rush {100,100,600}",
   parsed.slots[0].name === "Rush (dash)" && parsed.slots[0].search === "SEARCH_SPIN" &&
   JSON.stringify(parsed.slots[0].steps) === JSON.stringify([{ left: 100, right: 100, ms: 600 }]),
   JSON.stringify(parsed.slots[0]));
-check("slot 6 = Tornado SEARCH_SWEEP, 2 steps",
-  parsed.slots[6].search === "SEARCH_SWEEP" && parsed.slots[6].steps.length === 2,
+check("slot 6 = Bait-and-flank SEARCH_ARC, 2 steps",
+  parsed.slots[6].search === "SEARCH_ARC" && parsed.slots[6].steps.length === 2,
   JSON.stringify(parsed.slots[6]));
-check("slot 7 = Wait {0,0,300},{100,100,600}",
-  JSON.stringify(parsed.slots[7].steps) === JSON.stringify([{ left: 0, right: 0, ms: 300 }, { left: 100, right: 100, ms: 600 }]),
+check("slot 7 = Wait {0,0,300},{100,100,300}",
+  JSON.stringify(parsed.slots[7].steps) === JSON.stringify([{ left: 0, right: 0, ms: 300 }, { left: 100, right: 100, ms: 300 }]),
   JSON.stringify(parsed.slots[7].steps));
 check("slot 0 start = (0,-25,0)",
   JSON.stringify(parsed.slots[0].start) === JSON.stringify({ x: 0, y: -25, heading: 0 }),
@@ -78,7 +78,7 @@ check("handoff is 65% of each opening's total time",
   parsed.slots.map(s => T.slotHandoffMs(s)).join(","));
 check("turning openings start already angled",
   parsed.slots[1].start.heading === 30 && parsed.slots[2].start.heading === -30 &&
-  parsed.slots[4].start.heading === 45 && parsed.slots[5].start.heading === -45 &&
+  parsed.slots[4].start.heading === -90 && parsed.slots[5].start.heading === 90 &&
   parsed.slots[1].steps.length === 1 && parsed.slots[4].steps.length === 1);
 
 // --- round-trip: serialize then re-parse ---

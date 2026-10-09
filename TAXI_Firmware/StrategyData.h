@@ -31,7 +31,8 @@
  *
  * Openings that would otherwise turn to a heading now START at that heading
  * instead: the operator places the robot already angled, so no time or precision
- * is spent pivoting. Slots 1/2 start at +/-30 deg, slots 4/5 at +/-45 deg.
+ * is spent pivoting. Slots 1/2 start at +/-30 deg, slots 4/5 at +/-90 deg (facing
+ * across the arena toward the centre).
  *
  * The last field of each row is handoffMs: 65% of the opening's total time,
  * computed by the designer at export. After that point a close opponent outranks
@@ -42,9 +43,9 @@
  *   0 Rush (dash)              straight bull rush, reaches past mid-ring
  *   1/2 Angled rush            30 deg start, long angled rush
  *   3 Feint                    rush to mid-ring, pause, then rush again
- *   4/5 Flank                  45 deg start up a side lane, to hit a corner
- *   6 Tornado                  full 360 deg sweep, then charge
- *   7 Wait-then-rush           wait off-centre, then rush the opponent's line
+ *   4/5 Flank                  90 deg start, rush across toward the centre
+ *   6 Bait-and-flank           short reverse to bait, then flank right
+ *   7 Wait-then-rush           wait on the flank lane, then rush across
  */
 #ifndef STRATEGY_DATA_H
 #define STRATEGY_DATA_H
@@ -58,23 +59,23 @@ static const TacticStep s2[] = { {100,100,550} };
 // slot 3: Feint (rush, pause, rush)
 static const TacticStep s3[] = { {100,100,200}, {0,0,200}, {100,100,500} };
 // slot 4: Flank (right)
-static const TacticStep s4[] = { {100,100,400} };
+static const TacticStep s4[] = { {100,100,300} };
 // slot 5: Flank (left)
-static const TacticStep s5[] = { {100,100,400} };
-// slot 6: Tornado (spin-scan then charge)
-static const TacticStep s6[] = { {100,-100,480}, {100,100,400} };
+static const TacticStep s5[] = { {100,100,300} };
+// slot 6: Bait-and-flank (right)
+static const TacticStep s6[] = { {-100,-100,80}, {100,100,600} };
 // slot 7: Wait-then-rush (deceptive)
-static const TacticStep s7[] = { {0,0,300}, {100,100,600} };
+static const TacticStep s7[] = { {0,0,300}, {100,100,300} };
 
 static const Strategy STRATEGIES[8] = {
   { s0, 1, SEARCH_SPIN,  { 0, -25, 0 },    390 },    // 0: Rush (dash)
   { s1, 1, SEARCH_ARC,   { 0, -25, 30 },   358 },    // 1: Angled rush (right)
   { s2, 1, SEARCH_ARC,   { 0, -25, -30 },  358 },    // 2: Angled rush (left)
   { s3, 3, SEARCH_SPIN,  { 0, -25, 0 },    585 },    // 3: Feint (rush, pause, rush)
-  { s4, 1, SEARCH_ARC,   { 8, -25, 45 },   260 },    // 4: Flank (right)
-  { s5, 1, SEARCH_ARC,   { -8, -25, -45 }, 260 },    // 5: Flank (left)
-  { s6, 2, SEARCH_SWEEP, { 0, -25, 0 },    572 },    // 6: Tornado (spin-scan then charge)
-  { s7, 2, SEARCH_SPIN,  { 8, -25, -30 },  585 },    // 7: Wait-then-rush (deceptive)
+  { s4, 1, SEARCH_ARC,   { 8, -25, -90 },  195 },    // 4: Flank (right)
+  { s5, 1, SEARCH_ARC,   { -8, -25, 90 },  195 },    // 5: Flank (left)
+  { s6, 2, SEARCH_ARC,   { 0, -25, 30 },   442 },    // 6: Bait-and-flank (right)
+  { s7, 2, SEARCH_SPIN,  { 8, -25, -90 },  390 },    // 7: Wait-then-rush (deceptive)
 };
 
 #if DEBUG_VERBOSE
@@ -86,7 +87,7 @@ static const char* const STRATEGY_NAMES[8] = {
   "Feint (rush, pause, rush)",
   "Flank (right)",
   "Flank (left)",
-  "Tornado (spin-scan then charge)",
+  "Bait-and-flank (right)",
   "Wait-then-rush (deceptive)"
 };
 #endif

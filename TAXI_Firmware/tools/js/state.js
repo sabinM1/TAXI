@@ -258,18 +258,19 @@ window.TAXI = (function () {
   const MID     = { x: 0, y: -25, heading: 0 };    // centred, facing up
   const ANG_R   = { x: 0, y: -25, heading: 30 };   // placed already angled right
   const ANG_L   = { x: 0, y: -25, heading: -30 };  // placed already angled left
-  const FLANK_R = { x: 8, y: -25, heading: 45 };   // right lane, already angled
-  const FLANK_L = { x: -8, y: -25, heading: -45 }; // left lane, already angled
-  const WAIT    = { x: 8, y: -25, heading: -30 };  // off-centre, angled at the line
+  const FLANK_R = { x: 8, y: -25, heading: -90 };  // right lane, facing the centre
+  const FLANK_L = { x: -8, y: -25, heading: 90 };  // left lane, facing the centre
+  const BAIT_R  = { x: 0, y: -25, heading: 30 };   // centred, angled right
+  const WAIT    = { x: 8, y: -25, heading: -90 };  // on the right flank lane
   const PRESETS = [
-    { name: "Rush (dash)",                     search: "SEARCH_SPIN",  steps: [[100, 100, 600]], start: MID },
-    { name: "Angled rush (right)",             search: "SEARCH_ARC",   steps: [[100, 100, 550]], start: ANG_R },
-    { name: "Angled rush (left)",              search: "SEARCH_ARC",   steps: [[100, 100, 550]], start: ANG_L },
-    { name: "Feint (rush, pause, rush)",       search: "SEARCH_SPIN",  steps: [[100, 100, 200], [0, 0, 200], [100, 100, 500]], start: MID },
-    { name: "Flank (right)",                   search: "SEARCH_ARC",   steps: [[100, 100, 400]], start: FLANK_R },
-    { name: "Flank (left)",                    search: "SEARCH_ARC",   steps: [[100, 100, 400]], start: FLANK_L },
-    { name: "Tornado (spin-scan then charge)", search: "SEARCH_SWEEP", steps: [[100, -100, 480], [100, 100, 400]], start: MID },
-    { name: "Wait-then-rush (deceptive)",      search: "SEARCH_SPIN",  steps: [[0, 0, 300], [100, 100, 600]], start: WAIT },
+    { name: "Rush (dash)",                search: "SEARCH_SPIN",  steps: [[100, 100, 600]], start: MID },
+    { name: "Angled rush (right)",        search: "SEARCH_ARC",   steps: [[100, 100, 550]], start: ANG_R },
+    { name: "Angled rush (left)",         search: "SEARCH_ARC",   steps: [[100, 100, 550]], start: ANG_L },
+    { name: "Feint (rush, pause, rush)",  search: "SEARCH_SPIN",  steps: [[100, 100, 200], [0, 0, 200], [100, 100, 500]], start: MID },
+    { name: "Flank (right)",              search: "SEARCH_ARC",   steps: [[100, 100, 300]], start: FLANK_R },
+    { name: "Flank (left)",               search: "SEARCH_ARC",   steps: [[100, 100, 300]], start: FLANK_L },
+    { name: "Bait-and-flank (right)",     search: "SEARCH_ARC",   steps: [[-100, -100, 80], [100, 100, 600]], start: BAIT_R },
+    { name: "Wait-then-rush (deceptive)", search: "SEARCH_SPIN",  steps: [[0, 0, 300], [100, 100, 300]], start: WAIT },
   ];
 
   return {
