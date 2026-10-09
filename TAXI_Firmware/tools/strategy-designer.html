@@ -83,7 +83,7 @@
           <button id="exportBtn">⬇ Export StrategyData.h</button>
           <button id="clearBtn" class="danger">Clear all</button>
         </div>
-        <div class="hint">Import <code>TAXI_Firmware/StrategyData.h</code>, edit the openings, then export it back over the same file. There is no JSON — that C++ file is the only copy of the strategies.</div>
+        <div class="hint">Import <code>TAXI_Firmware/StrategyData.h</code>, edit the openings, then export it back over the same file. There is no JSON — that C++ file is the only copy of the strategies. On export each opening also gets a <b>handoff time</b> (65 % of its total): after that point a close opponent outranks the committed move.</div>
         <div id="fileStatus" class="hint"></div>
       </div>
     </details>
@@ -133,7 +133,7 @@
           </select>
           <button id="applyStartPreset">Apply</button>
         </div>
-        <div class="hint">This start pose belongs to the <b>active slot</b> and is saved with it in <code>StrategyData.h</code>. Drag the robot on the ring to move it; drag the round handle to rotate. Type exact values in X / Y / Heading for a fully custom pose — the dropdown flips to <b>Custom</b> whenever the pose matches no preset. Heading 0° = up (toward the opponent), positive = clockwise.</div>
+        <div class="hint">This start pose belongs to the <b>active slot</b> and is saved with it in <code>StrategyData.h</code>. Drag the robot on the ring to move it; drag the round handle to rotate. Type exact values in X / Y / Heading for a fully custom pose — the dropdown flips to <b>Custom</b> whenever the pose matches no preset. Heading 0° = up (toward the opponent), positive = clockwise. Openings that would otherwise turn now start <b>already angled</b> — set the heading here to match, so no time is spent pivoting.</div>
       </div>
     </details>
 

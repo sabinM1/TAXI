@@ -56,7 +56,7 @@ check("slot 0 = Rush {100,100,600}",
   parsed.slots[0].name === "Rush (dash)" && parsed.slots[0].search === "SEARCH_SPIN" &&
   JSON.stringify(parsed.slots[0].steps) === JSON.stringify([{ left: 100, right: 100, ms: 600 }]),
   JSON.stringify(parsed.slots[0]));
-check("slot 6 = Hit-spin SEARCH_SWEEP, 2 steps",
+check("slot 6 = Tornado SEARCH_SWEEP, 2 steps",
   parsed.slots[6].search === "SEARCH_SWEEP" && parsed.slots[6].steps.length === 2,
   JSON.stringify(parsed.slots[6]));
 check("slot 7 = Wait {0,0,300},{100,100,600}",
@@ -73,6 +73,13 @@ check("no opening drives itself off the dohyo",
     return !sim.exit && !T.robotOut(sim.endX, sim.endY, sim.endTh);
   }),
   parsed.slots.map(s => { const sim = T.simulate(s.steps, s.start); return sim.exit ? "EXIT" : "ok"; }).join(","));
+check("handoff is 65% of each opening's total time",
+  parsed.slots.every(s => T.slotHandoffMs(s) === Math.round(T.slotTotalMs(s) * 0.65)),
+  parsed.slots.map(s => T.slotHandoffMs(s)).join(","));
+check("turning openings start already angled",
+  parsed.slots[1].start.heading === 30 && parsed.slots[2].start.heading === -30 &&
+  parsed.slots[4].start.heading === 45 && parsed.slots[5].start.heading === -45 &&
+  parsed.slots[1].steps.length === 1 && parsed.slots[4].steps.length === 1);
 
 // --- round-trip: serialize then re-parse ---
 T.state.slots = parsed.slots;
@@ -94,11 +101,11 @@ check("serialize -> parse round-trip", rt);
 check("output has STRATEGIES[8]", /static const Strategy STRATEGIES\[8\] = \{/.test(out));
 check("output has 8 TacticStep arrays", (out.match(/static const TacticStep s\d\[\]/g) || []).length === 8);
 check("output has STRATEGY_NAMES", /STRATEGY_NAMES\[8\]/.test(out));
-check("output carries start poses", /\{ s0, 1, SEARCH_SPIN, \{ 0, -25, 0 \} \}/.test(out));
+check("output carries start poses", /\{ s0, 1, SEARCH_SPIN, \{ 0, -25, 0 \}, 390 \}/.test(out));
 
 // --- kinematics sanity ---
-const sim = T.simulate(parsed.slots[1].steps, { x: 0, y: -15, heading: 0 });   // Turn-right rush
-check("slot1 sim: 30deg turn then rush",
+const sim = T.simulate(parsed.slots[1].steps, parsed.slots[1].start);   // Angled rush (right)
+check("slot1 rushes straight from its 30deg start",
   Math.abs(sim.endTh / T.DEG - 30) < 0.5 && sim.exit === null,
   "endTh " + (sim.endTh / T.DEG).toFixed(1) + "deg, exit " + (sim.exit ? "yes" : "no"));
 check("straightTimeToEdge(0) ~720ms from the shikiri-sen",

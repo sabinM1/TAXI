@@ -73,12 +73,18 @@ struct StartPose { float x, y, heading; };
  * the start signal, then combat hands off to SEARCH. The search field
  * also picks which search pattern this opening leads into, and start
  * records the placement the opening assumes.
+ *
+ * handoffMs is 65% of the opening's total time, computed by the strategy
+ * designer at export. Once that much of the opening has run, a close opponent
+ * outranks the committed move: the opening is open-loop, but it must not drive
+ * past a target it can already see (see the ST_TACTIC case).
  */
 struct Strategy {
   const TacticStep* steps;
   uint8_t stepCount;
   SearchStyle search;
   StartPose start;
+  uint16_t handoffMs;
 };
 
 // The opening data: TacticStep arrays, STRATEGIES[8], STRATEGY_NAMES[8].
@@ -125,10 +131,18 @@ void strategiesInit() {
 // Non-blocking opening executor ----------------------------------------
 static uint8_t  tacticStep = 0;
 static uint32_t tacticStepStart = 0;
+static uint32_t tacticStartMs = 0;
 static bool     tacticFirst = true;
 
 /** Rewind the executor. Called by the state machine on entering ST_TACTIC. */
-void tacticReset() { tacticStep = 0; tacticStepStart = millis(); tacticFirst = true; }
+void tacticReset() { tacticStep = 0; tacticStepStart = millis(); tacticStartMs = millis(); tacticFirst = true; }
+
+/**
+ * Milliseconds since the opening actually started. 0 until the first
+ * tacticRun() call, so a caller that checks before the opening has ticked
+ * never sees a stale elapsed time.
+ */
+uint32_t tacticElapsedMs() { return tacticFirst ? 0 : (millis() - tacticStartMs); }
 
 /**
  * Run one loop-tick of the opening. Holds the current step's motor values
@@ -141,7 +155,7 @@ bool tacticRun() {
   if (tacticStep >= s.stepCount) { motorsStop(); return true; }
 
   const TacticStep& st = s.steps[tacticStep];
-  if (tacticFirst) { tacticFirst = false; tacticStepStart = millis(); }
+  if (tacticFirst) { tacticFirst = false; tacticStepStart = millis(); tacticStartMs = millis(); }
   motorsSet(st.leftPct, st.rightPct);
 
   if (millis() - tacticStepStart >= st.ms) {

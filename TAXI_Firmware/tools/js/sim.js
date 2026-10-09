@@ -245,6 +245,7 @@
     els.readout.innerHTML =
       '<div class="sim-ro-grid">' +
         cell("Opening time", sim.totalTime.toFixed(2) + " s") +
+        cell("Handoff (65%)", TAXI.slotHandoffMs({ steps: steps }) + " ms") +
         cell("Travel distance", sim.distance.toFixed(1) + " cm") +
         cell("Edge-exit time", exitTxt) +
         cell("Final heading", endTh.toFixed(0) + "°") +

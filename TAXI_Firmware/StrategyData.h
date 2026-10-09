@@ -20,8 +20,8 @@
  * toward the outer edge. The shikiri-sen is at y = -5 cm, so y = -10 cm is the
  * most forward legal centre for a 10 cm robot; the tawara is part of the dohyo,
  * so y = -33.5 cm is the most rearward legal centre (back edge on the border).
- * Every opening starts deep (y = -25 to -31 cm) to leave runway to accelerate,
- * turn or flank.
+ * Every opening starts deep (y = -25 cm) to leave runway to accelerate, turn or
+ * flank.
  *
  * Openings are tuned against the measured kinematics (60 cm/s straight, 750 deg/s
  * full differential) so each one stays inside the ring even if the opponent is
@@ -29,55 +29,64 @@
  * its own. The line-edge override would catch it, but an opening that relies on
  * that has already lost the round.
  *
+ * Openings that would otherwise turn to a heading now START at that heading
+ * instead: the operator places the robot already angled, so no time or precision
+ * is spent pivoting. Slots 1/2 start at +/-30 deg, slots 4/5 at +/-45 deg.
+ *
+ * The last field of each row is handoffMs: 65% of the opening's total time,
+ * computed by the designer at export. After that point a close opponent outranks
+ * the committed move (see ST_TACTIC) — the opening is open-loop, but it must not
+ * drive past a target it can already see.
+ *
  * The set, and what each is for:
  *   0 Rush (dash)              straight bull rush, reaches past mid-ring
- *   1/2 Turn-right/left rush   30 deg turn then a long angled rush
- *   3 Retreat-then-attack      short reverse to bait, then rush
- *   4/5 Angle-45 flank        45 deg turn up a side lane, to hit a corner
- *   6 Hit-spin                 full 360 deg sweep, then rush
- *   7 Wait-then-rush           pause to bait the opponent in, then rush
+ *   1/2 Angled rush            30 deg start, long angled rush
+ *   3 Feint                    rush to mid-ring, pause, then rush again
+ *   4/5 Flank                  45 deg start up a side lane, to hit a corner
+ *   6 Tornado                  full 360 deg sweep, then charge
+ *   7 Wait-then-rush           wait off-centre, then rush the opponent's line
  */
 #ifndef STRATEGY_DATA_H
 #define STRATEGY_DATA_H
 
 // slot 0: Rush (dash)
 static const TacticStep s0[] = { {100,100,600} };
-// slot 1: Turn-right rush
-static const TacticStep s1[] = { {100,-100,40}, {100,100,550} };
-// slot 2: Turn-left rush
-static const TacticStep s2[] = { {-100,100,40}, {100,100,550} };
-// slot 3: Retreat-then-attack (fake)
-static const TacticStep s3[] = { {-100,-100,100}, {100,100,700} };
-// slot 4: Angle-45 flank (right)
-static const TacticStep s4[] = { {100,-100,60}, {100,100,400} };
-// slot 5: Angle-45 flank (left)
-static const TacticStep s5[] = { {-100,100,60}, {100,100,400} };
-// slot 6: Hit-spin (scan then rush)
+// slot 1: Angled rush (right)
+static const TacticStep s1[] = { {100,100,550} };
+// slot 2: Angled rush (left)
+static const TacticStep s2[] = { {100,100,550} };
+// slot 3: Feint (rush, pause, rush)
+static const TacticStep s3[] = { {100,100,200}, {0,0,200}, {100,100,500} };
+// slot 4: Flank (right)
+static const TacticStep s4[] = { {100,100,400} };
+// slot 5: Flank (left)
+static const TacticStep s5[] = { {100,100,400} };
+// slot 6: Tornado (spin-scan then charge)
 static const TacticStep s6[] = { {100,-100,480}, {100,100,400} };
 // slot 7: Wait-then-rush (deceptive)
 static const TacticStep s7[] = { {0,0,300}, {100,100,600} };
 
 static const Strategy STRATEGIES[8] = {
-  { s0, 1, SEARCH_SPIN, { 0, -25, 0 } },    // 0: Rush (dash)
-  { s1, 2, SEARCH_ARC, { 0, -25, 0 } },    // 1: Turn-right rush
-  { s2, 2, SEARCH_ARC, { 0, -25, 0 } },    // 2: Turn-left rush
-  { s3, 2, SEARCH_SPIN, { 0, -25, 0 } },    // 3: Retreat-then-attack (fake)
-  { s4, 2, SEARCH_ARC, { 8, -25, 0 } },    // 4: Angle-45 flank (right)
-  { s5, 2, SEARCH_ARC, { -8, -25, 0 } },    // 5: Angle-45 flank (left)
-  { s6, 2, SEARCH_SWEEP, { 0, -25, 0 } },    // 6: Hit-spin (scan then rush)
-  { s7, 2, SEARCH_SPIN, { 0, -31, 0 } },    // 7: Wait-then-rush (deceptive)
+  { s0, 1, SEARCH_SPIN,  { 0, -25, 0 },    390 },    // 0: Rush (dash)
+  { s1, 1, SEARCH_ARC,   { 0, -25, 30 },   358 },    // 1: Angled rush (right)
+  { s2, 1, SEARCH_ARC,   { 0, -25, -30 },  358 },    // 2: Angled rush (left)
+  { s3, 3, SEARCH_SPIN,  { 0, -25, 0 },    585 },    // 3: Feint (rush, pause, rush)
+  { s4, 1, SEARCH_ARC,   { 8, -25, 45 },   260 },    // 4: Flank (right)
+  { s5, 1, SEARCH_ARC,   { -8, -25, -45 }, 260 },    // 5: Flank (left)
+  { s6, 2, SEARCH_SWEEP, { 0, -25, 0 },    572 },    // 6: Tornado (spin-scan then charge)
+  { s7, 2, SEARCH_SPIN,  { 8, -25, -30 },  585 },    // 7: Wait-then-rush (deceptive)
 };
 
 #if DEBUG_VERBOSE
 // Human-readable opening names, index-aligned with STRATEGIES[].
 static const char* const STRATEGY_NAMES[8] = {
   "Rush (dash)",
-  "Turn-right rush",
-  "Turn-left rush",
-  "Retreat-then-attack (fake)",
-  "Angle-45 flank (right)",
-  "Angle-45 flank (left)",
-  "Hit-spin (scan then rush)",
+  "Angled rush (right)",
+  "Angled rush (left)",
+  "Feint (rush, pause, rush)",
+  "Flank (right)",
+  "Flank (left)",
+  "Tornado (spin-scan then charge)",
   "Wait-then-rush (deceptive)"
 };
 #endif

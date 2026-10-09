@@ -137,8 +137,9 @@ window.TAXI = (function () {
     const rows = {};
     const tm = text.match(/static\s+const\s+Strategy\s+STRATEGIES\s*\[\s*8\s*\]\s*=\s*\{([\s\S]*?)\}\s*;/);
     if (tm) {
-      // start pose is optional so older files without it still parse
-      const rowRe = /\{\s*s(\d+)\s*,\s*(\d+)\s*,\s*(SEARCH_\w+)\s*(?:,\s*\{\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\})?\s*\}/g;
+      // start pose is optional so older files without it still parse; the
+      // trailing handoffMs is optional too (recomputed on export).
+      const rowRe = /\{\s*s(\d+)\s*,\s*(\d+)\s*,\s*(SEARCH_\w+)\s*(?:,\s*\{\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\})?\s*(?:,\s*(\d+)\s*)?\}/g;
       let rm;
       while ((rm = rowRe.exec(tm[1]))) {
         rows[+rm[1]] = {
@@ -180,6 +181,17 @@ window.TAXI = (function () {
     if (!isFinite(n)) return "0";
     return String(Math.round(n * 100) / 100);
   }
+  // 65% of an opening's total time: after this much has run, a close opponent
+  // outranks the committed move (see ST_TACTIC in StateMachine.h). Computed here,
+  // at export, so the firmware never has to add the steps up.
+  const HANDOFF_FRACTION = 0.65;
+  function slotTotalMs(sl) {
+    return (sl.steps || []).reduce((a, st) => a + (st.ms || 0), 0);
+  }
+  function slotHandoffMs(sl) {
+    return Math.round(slotTotalMs(sl) * HANDOFF_FRACTION);
+  }
+
   function serializeStrategyData() {
     const s = state;
     const L = [];
@@ -200,6 +212,9 @@ window.TAXI = (function () {
     L.push(" *   { x, y, heading }  — x/y in cm from centre (+x right, +y toward the");
     L.push(" *   opponent), heading in degrees (0 = up, + = clockwise). The opening is");
     L.push(" *   open-loop, so this is placement metadata, not a steering input.");
+    L.push(" *");
+    L.push(" * The trailing number is handoffMs: 65% of the opening's total time. After");
+    L.push(" * that point a close opponent outranks the committed move (see ST_TACTIC).");
     L.push(" */");
     L.push("#ifndef STRATEGY_DATA_H");
     L.push("#define STRATEGY_DATA_H");
@@ -215,7 +230,7 @@ window.TAXI = (function () {
     s.slots.forEach((sl, i) => {
       const n = sl.steps.length ? sl.steps.length : 1;
       const sp = sl.start || s.start;
-      L.push(`  { s${i}, ${n}, ${sl.search}, { ${num(sp.x)}, ${num(sp.y)}, ${num(sp.heading)} } },    // ${i}: ${sl.name || "unnamed"}`);
+      L.push(`  { s${i}, ${n}, ${sl.search}, { ${num(sp.x)}, ${num(sp.y)}, ${num(sp.heading)} }, ${slotHandoffMs(sl)} },    // ${i}: ${sl.name || "unnamed"}`);
     });
     L.push("};");
     L.push("");
@@ -240,19 +255,21 @@ window.TAXI = (function () {
   // legal centre. The openings start deep to leave runway to accelerate, turn or
   // flank. These mirror the preset list in strategy-designer.html so the two
   // stay in step.
-  const MID     = { x: 0, y: -25, heading: 0 };   // ~20 cm behind the line
-  const DEEP    = { x: 0, y: -31, heading: 0 };   // near the outer edge
-  const BR      = { x: 8, y: -25, heading: 0 };   // bottom-right lane
-  const BL      = { x: -8, y: -25, heading: 0 };  // bottom-left lane
+  const MID     = { x: 0, y: -25, heading: 0 };    // centred, facing up
+  const ANG_R   = { x: 0, y: -25, heading: 30 };   // placed already angled right
+  const ANG_L   = { x: 0, y: -25, heading: -30 };  // placed already angled left
+  const FLANK_R = { x: 8, y: -25, heading: 45 };   // right lane, already angled
+  const FLANK_L = { x: -8, y: -25, heading: -45 }; // left lane, already angled
+  const WAIT    = { x: 8, y: -25, heading: -30 };  // off-centre, angled at the line
   const PRESETS = [
-    { name: "Rush (dash)",                  search: "SEARCH_SPIN",  steps: [[100, 100, 600]], start: MID },
-    { name: "Turn-right rush",              search: "SEARCH_ARC",   steps: [[100, -100, 40], [100, 100, 550]], start: MID },
-    { name: "Turn-left rush",               search: "SEARCH_ARC",   steps: [[-100, 100, 40], [100, 100, 550]], start: MID },
-    { name: "Retreat-then-attack (fake)",   search: "SEARCH_SPIN",  steps: [[-100, -100, 100], [100, 100, 700]], start: MID },
-    { name: "Angle-45 flank (right)",       search: "SEARCH_ARC",   steps: [[100, -100, 60], [100, 100, 400]], start: BR },
-    { name: "Angle-45 flank (left)",        search: "SEARCH_ARC",   steps: [[-100, 100, 60], [100, 100, 400]], start: BL },
-    { name: "Hit-spin (scan then rush)",    search: "SEARCH_SWEEP", steps: [[100, -100, 480], [100, 100, 400]], start: MID },
-    { name: "Wait-then-rush (deceptive)",   search: "SEARCH_SPIN",  steps: [[0, 0, 300], [100, 100, 600]], start: DEEP },
+    { name: "Rush (dash)",                     search: "SEARCH_SPIN",  steps: [[100, 100, 600]], start: MID },
+    { name: "Angled rush (right)",             search: "SEARCH_ARC",   steps: [[100, 100, 550]], start: ANG_R },
+    { name: "Angled rush (left)",              search: "SEARCH_ARC",   steps: [[100, 100, 550]], start: ANG_L },
+    { name: "Feint (rush, pause, rush)",       search: "SEARCH_SPIN",  steps: [[100, 100, 200], [0, 0, 200], [100, 100, 500]], start: MID },
+    { name: "Flank (right)",                   search: "SEARCH_ARC",   steps: [[100, 100, 400]], start: FLANK_R },
+    { name: "Flank (left)",                    search: "SEARCH_ARC",   steps: [[100, 100, 400]], start: FLANK_L },
+    { name: "Tornado (spin-scan then charge)", search: "SEARCH_SWEEP", steps: [[100, -100, 480], [100, 100, 400]], start: MID },
+    { name: "Wait-then-rush (deceptive)",      search: "SEARCH_SPIN",  steps: [[0, 0, 300], [100, 100, 600]], start: WAIT },
   ];
 
   return {
@@ -260,5 +277,6 @@ window.TAXI = (function () {
     corners, robotOut, simulate, straightTimeToEdge, activeStart,
     parseStrategyData, serializeStrategyData,
     PRESETS, newSlot, ensureSlots,
+    HANDOFF_FRACTION, slotTotalMs, slotHandoffMs,
   };
 })();

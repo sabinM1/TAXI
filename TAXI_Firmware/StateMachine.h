@@ -559,10 +559,21 @@ void stateMachineUpdate() {
       break;
 
     case ST_TACTIC:
-      // The opening runs to completion. The ONLY thing that can interrupt it is
-      // the line-edge override above (EVADE), which outranks every state body —
-      // so a clipped border still aborts the opening, but a detected opponent
-      // does NOT. The opening is a committed, open-loop move by design.
+      // The opening runs to completion, with ONE exception besides the line-edge
+      // override above: once handoffMs (65% of the opening, baked in by the
+      // designer) has elapsed, a close opponent outranks the committed move. The
+      // opening is open-loop, but it must not drive past a target it can already
+      // see — this is the same sighting + range test ST_SEARCH commits on, so the
+      // handoff lands in ST_ATTACK exactly as a normal sighting would.
+      if (tacticElapsedMs() >= STRATEGIES[strategyIndex].handoffMs) {
+        int8_t sighted = sensorsOpponent();
+        bool ok; uint16_t mm = sensorsClosestMm(&ok);
+        if (sighted != 127 && ok && mm <= TARGET_ENGAGE_MM) {
+          lastSeenMs = millis();
+          gotoState(ST_ATTACK);
+          break;
+        }
+      }
       if (tacticRun()) {
         gotoState(ST_SEARCH);
         enterSearch();
