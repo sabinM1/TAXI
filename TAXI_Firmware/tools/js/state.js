@@ -275,8 +275,8 @@ window.TAXI = (function () {
     { name: "Angled rush (left)",     search: "SEARCH_ARC",  steps: [[100, 100, 550]], start: ANG_L },
     { name: "Flank (right)",          search: "SEARCH_ARC",  steps: [[100, 100, 200], [-100, 100, 120]], start: FLANK_R },
     { name: "Flank (left)",           search: "SEARCH_ARC",  steps: [[100, 100, 200], [100, -100, 120]], start: FLANK_L },
-    { name: "Edge flank (right)",     search: "SEARCH_ARC",  steps: [[60, 100, 1333], [-100, 100, 90]], start: EDGE_R, blind: true },
-    { name: "Edge flank (left)",      search: "SEARCH_ARC",  steps: [[100, 60, 1333], [100, -100, 90]], start: EDGE_L, blind: true },
+    { name: "Edge flank (right)",     search: "SEARCH_ARC",  steps: [[67, 100, 1616], [-100, 100, 90]], start: EDGE_R, blind: true },
+    { name: "Edge flank (left)",      search: "SEARCH_ARC",  steps: [[100, 67, 1616], [100, -100, 90]], start: EDGE_L, blind: true },
     { name: "Bait-and-flank (right)", search: "SEARCH_ARC",  steps: [[-100, -100, 80], [100, 100, 600]], start: BAIT_R },
   ];
 

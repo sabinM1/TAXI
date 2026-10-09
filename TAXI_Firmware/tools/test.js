@@ -58,7 +58,7 @@ check("slot 0 = Rush {100,100,600}",
   JSON.stringify(parsed.slots[0]));
 check("slot 6 = Edge flank (left) arc + turn",
   parsed.slots[6].search === "SEARCH_ARC" && parsed.slots[6].steps.length === 2 &&
-  JSON.stringify(parsed.slots[6].steps) === JSON.stringify([{ left: 100, right: 60, ms: 1333 }, { left: 100, right: -100, ms: 90 }]),
+  JSON.stringify(parsed.slots[6].steps) === JSON.stringify([{ left: 100, right: 67, ms: 1616 }, { left: 100, right: -100, ms: 90 }]),
   JSON.stringify(parsed.slots[6]));
 check("slot 7 = Bait-and-flank reverse + rush",
   JSON.stringify(parsed.slots[7].steps) === JSON.stringify([{ left: -100, right: -100, ms: 80 }, { left: 100, right: 100, ms: 600 }]),

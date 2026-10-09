@@ -46,7 +46,7 @@
  *   0 Rush (dash)              straight bull rush, reaches past mid-ring
  *   1/2 Angled rush            30 deg start, long angled rush
  *   3/4 Flank                  45 deg start, rush out, then turn onto the middle
- *   5/6 Edge flank             90 deg start, 200 deg arc up the side, blind
+ *   5/6 Edge flank             90 deg start, wide 200 deg arc hugging the tawara, blind
  *   7 Bait-and-flank           short reverse to bait, then flank right
  */
 #ifndef STRATEGY_DATA_H
@@ -63,9 +63,9 @@ static const TacticStep s3[] = { {100,100,200}, {-100,100,120} };
 // slot 4: Flank (left)
 static const TacticStep s4[] = { {100,100,200}, {100,-100,120} };
 // slot 5: Edge flank (right)
-static const TacticStep s5[] = { {60,100,1333}, {-100,100,90} };
+static const TacticStep s5[] = { {67,100,1616}, {-100,100,90} };
 // slot 6: Edge flank (left)
-static const TacticStep s6[] = { {100,60,1333}, {100,-100,90} };
+static const TacticStep s6[] = { {100,67,1616}, {100,-100,90} };
 // slot 7: Bait-and-flank (right)
 static const TacticStep s7[] = { {-100,-100,80}, {100,100,600} };
 
