@@ -43,6 +43,10 @@ check("default state has 8 empty slots", T.state.slots.length === 8 && T.state.s
 check("default loaded=false", T.state.loaded === false);
 check("default start sits in the bottom half", T.state.start.y < 0, "y=" + T.state.start.y);
 check("every preset start sits in the bottom half", T.PRESETS.every(p => p.start.y < 0));
+check("most presets start near the outer edge", T.PRESETS.filter(p => p.start.y <= -25).length >= 6,
+  T.PRESETS.map(p => p.start.y).join(","));
+check("every preset start stays inside the dohyo",
+  T.PRESETS.every(p => !T.robotOut(p.start.x, p.start.y, p.start.heading)));
 
 // --- parse the real StrategyData.h ---
 const src = fs.readFileSync("TAXI_Firmware/StrategyData.h", "utf8");
@@ -87,7 +91,7 @@ check("output has STRATEGY_NAMES", /STRATEGY_NAMES\[8\]/.test(out));
 check("output carries start poses", /\{ s0, 1, SEARCH_SPIN, \{ 0, -10, 0 \} \}/.test(out));
 
 // --- kinematics sanity ---
-const sim = T.simulate(parsed.slots[1].steps);   // Turn-right rush
+const sim = T.simulate(parsed.slots[1].steps, { x: 0, y: -15, heading: 0 });   // Turn-right rush
 check("slot1 sim: 90deg turn then rush",
   Math.abs(sim.endTh / T.DEG - 90) < 0.5 && sim.exit === null,
   "endTh " + (sim.endTh / T.DEG).toFixed(1) + "deg, exit " + (sim.exit ? "yes" : "no"));

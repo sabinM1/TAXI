@@ -117,8 +117,8 @@
           <select id="startPreset">
             <optgroup label="Bottom half (your side)">
               <option value="shikiri">Behind shikiri-sen (front edge on the line)</option>
-              <option value="mid">Mid bottom (≈5 cm behind the line)</option>
-              <option value="deep">Deep bottom (near the back of the ring)</option>
+              <option value="mid">Mid bottom (≈20 cm behind the line)</option>
+              <option value="deep">Deep bottom (near the outer edge)</option>
               <option value="bl">Bottom-left lane (facing up)</option>
               <option value="br">Bottom-right lane (facing up)</option>
               <option value="bl30">Bottom-left, angled 30° right</option>
@@ -212,12 +212,12 @@
     var behind = 5 + T.state.robot.length / 2;   // front edge on the shikiri-sen
     switch (key) {
       case "shikiri": return { x: 0, y: -behind, heading: 0 };
-      case "mid":     return { x: 0, y: -15, heading: 0 };
-      case "deep":    return { x: 0, y: -22, heading: 0 };
-      case "bl":      return { x: -8, y: -15, heading: 0 };
-      case "br":      return { x: 8, y: -15, heading: 0 };
-      case "bl30":    return { x: -8, y: -15, heading: 30 };
-      case "br30":    return { x: 8, y: -15, heading: -30 };
+      case "mid":     return { x: 0, y: -25, heading: 0 };
+      case "deep":    return { x: 0, y: -31, heading: 0 };
+      case "bl":      return { x: -8, y: -25, heading: 0 };
+      case "br":      return { x: 8, y: -25, heading: 0 };
+      case "bl30":    return { x: -8, y: -25, heading: 30 };
+      case "br30":    return { x: 8, y: -25, heading: -30 };
       case "edge":    return { x: 0, y: -(R - T.state.robot.length / 2), heading: 0 };
       case "left":    return { x: -behind, y: 0, heading: 90 };
       case "right":   return { x: behind, y: 0, heading: -90 };

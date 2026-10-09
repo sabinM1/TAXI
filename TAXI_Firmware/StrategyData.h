@@ -16,9 +16,12 @@
  *   opponent), heading in degrees (0 = up, + = clockwise). The opening is
  *   open-loop, so this is placement metadata, not a steering input.
  *
- * Placements sit in the BOTTOM half (operator's side, y < 0). The shikiri-sen
- * is at y = -5 cm, so y = -10 cm is the most forward legal centre for a 10 cm
- * robot; deeper and offset poses give the openings room to turn or flank.
+ * Placements sit in the BOTTOM half (operator's side, y < 0), pushed back
+ * toward the outer edge. The shikiri-sen is at y = -5 cm, so y = -10 cm is the
+ * most forward legal centre for a 10 cm robot; the tawara is part of the dohyo,
+ * so y = -33.5 cm is the most rearward legal centre (back edge on the border).
+ * The openings start deep (y = -25 to -31 cm) to leave runway to accelerate,
+ * turn or flank; only the rush starts on the line.
  */
 #ifndef STRATEGY_DATA_H
 #define STRATEGY_DATA_H
@@ -42,13 +45,13 @@ static const TacticStep s7[] = { {0,0,300}, {100,100,400} };
 
 static const Strategy STRATEGIES[8] = {
   { s0, 1, SEARCH_SPIN, { 0, -10, 0 } },    // 0: Rush (dash) — front edge on the line
-  { s1, 2, SEARCH_ARC, { 0, -15, 0 } },    // 1: Turn-right rush
-  { s2, 2, SEARCH_ARC, { 0, -15, 0 } },    // 2: Turn-left rush
-  { s3, 2, SEARCH_SPIN, { 0, -22, 0 } },    // 3: Retreat-then-attack (fake)
-  { s4, 2, SEARCH_ARC, { 8, -15, 0 } },    // 4: Angle-45 flank (right)
-  { s5, 2, SEARCH_ARC, { 8, -15, 0 } },    // 5: Angle-90 side attack (right)
-  { s6, 2, SEARCH_SWEEP, { 0, -15, 0 } },    // 6: Hit-spin (scan then rush)
-  { s7, 2, SEARCH_SPIN, { 0, -22, 0 } },    // 7: Wait-then-rush (deceptive)
+  { s1, 2, SEARCH_ARC, { 0, -25, 0 } },    // 1: Turn-right rush
+  { s2, 2, SEARCH_ARC, { 0, -25, 0 } },    // 2: Turn-left rush
+  { s3, 2, SEARCH_SPIN, { 0, -31, 0 } },    // 3: Retreat-then-attack (fake)
+  { s4, 2, SEARCH_ARC, { 8, -25, 0 } },    // 4: Angle-45 flank (right)
+  { s5, 2, SEARCH_ARC, { 8, -25, 0 } },    // 5: Angle-90 side attack (right)
+  { s6, 2, SEARCH_SWEEP, { 0, -25, 0 } },    // 6: Hit-spin (scan then rush)
+  { s7, 2, SEARCH_SPIN, { 0, -31, 0 } },    // 7: Wait-then-rush (deceptive)
 };
 
 #if DEBUG_VERBOSE

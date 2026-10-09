@@ -32,7 +32,7 @@ window.TAXI = (function () {
     dohyo: { diameter: 77, tawara: 2.5 },
     robot: { length: 10, width: 10 },
     calib: { straight: 60, turn: 750 },   // cm/s @100% duty ; deg/s @full differential
-    start: { x: 0, y: -15, heading: 0 },  // DEFAULT placement for new slots (cm ; deg)
+    start: { x: 0, y: -25, heading: 0 },  // DEFAULT placement for new slots (cm ; deg)
     active: 0,
     slots: [],                            // 8 x { name, search, steps, start }
     loaded: false,                        // true once a StrategyData.h has been imported
@@ -234,14 +234,16 @@ window.TAXI = (function () {
 
   /* ------------------------------------------------------------ presets */
   // Start poses live in the BOTTOM half of the dohyo (the operator's side,
-  // negative y). The shikiri-sen sits at y = -5 cm, so y = -10 cm is the most
-  // forward legal centre for a 10 cm robot; the rest are placed deeper and,
-  // for the flanking openings, offset to one side. These mirror the preset
-  // list in strategy-designer.html so the two stay in step.
+  // negative y), pushed back toward the outer edge. The shikiri-sen sits at
+  // y = -5 cm, so y = -10 cm is the most forward legal centre for a 10 cm robot;
+  // the tawara counts as part of the dohyo, so y = -33.5 cm is the most rearward
+  // legal centre. The openings start deep to leave runway to accelerate, turn or
+  // flank; only the rush starts on the line. These mirror the preset list in
+  // strategy-designer.html so the two stay in step.
   const SHIKIRI = { x: 0, y: -10, heading: 0 };   // front edge on the line
-  const MID     = { x: 0, y: -15, heading: 0 };   // ~5 cm behind the line
-  const DEEP    = { x: 0, y: -22, heading: 0 };   // near the back of the ring
-  const BR      = { x: 8, y: -15, heading: 0 };   // bottom-right lane
+  const MID     = { x: 0, y: -25, heading: 0 };   // ~20 cm behind the line
+  const DEEP    = { x: 0, y: -31, heading: 0 };   // near the outer edge
+  const BR      = { x: 8, y: -25, heading: 0 };   // bottom-right lane
   const PRESETS = [
     { name: "Rush (dash)",                  search: "SEARCH_SPIN",  steps: [[100, 100, 250]], start: SHIKIRI },
     { name: "Turn-right rush",              search: "SEARCH_ARC",   steps: [[100, -100, 120], [100, 100, 400]], start: MID },
