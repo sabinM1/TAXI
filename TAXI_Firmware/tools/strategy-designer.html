@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TAXI — Mini Sumo Strategy Designer</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c232c; --line:#2a323d;
+    --txt:#d7dee8; --dim:#8b97a7; --accent:#4ea1ff; --warn:#ff6b6b; --ok:#3ddc84;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg); color:var(--txt);
+    font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  header{padding:10px 16px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  header h1{font-size:15px;margin:0;letter-spacing:.5px}
+  header .sub{color:var(--dim);font-size:12px}
+  main{flex:1;display:flex;min-height:0}
+  .stage{flex:1;min-width:0;display:flex;flex-direction:column;padding:12px;gap:10px}
+  .canvas-wrap{flex:1;min-height:0;position:relative;display:flex;align-items:center;justify-content:center}
+  canvas{width:100%;height:100%;display:block;border-radius:8px;touch-action:none;cursor:grab}
+  canvas:active{cursor:grabbing}
+  .hud{position:absolute;left:12px;bottom:12px;background:rgba(14,17,22,.82);border:1px solid var(--line);
+       border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.6;pointer-events:none;white-space:pre}
+  .sim-controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap;min-height:34px}
+  aside{width:400px;flex:0 0 400px;border-left:1px solid var(--line);background:var(--panel);
+        overflow-y:auto;padding:10px 12px 40px}
+  aside::-webkit-scrollbar{width:10px}
+  aside::-webkit-scrollbar-thumb{background:#2a323d;border-radius:5px}
+  details{border:1px solid var(--line);border-radius:8px;margin-bottom:10px;background:var(--panel2)}
+  details>summary{cursor:pointer;padding:8px 10px;font-weight:600;letter-spacing:.3px;list-style:none;user-select:none}
+  details>summary::-webkit-details-marker{display:none}
+  details>summary::before{content:"▸ ";color:var(--dim)}
+  details[open]>summary::before{content:"▾ "}
+  .body{padding:4px 10px 12px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  label{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--dim)}
+  input,select,button{font:inherit;color:var(--txt);background:#0d1117;border:1px solid var(--line);border-radius:6px;padding:5px 7px}
+  input:focus,select:focus{outline:1px solid var(--accent);border-color:var(--accent)}
+  input[type=number]{width:100%}
+  button{cursor:pointer;background:#1f2733;border-color:#33404f}
+  button:hover{background:#27313f}
+  button.primary{background:#1d4e89;border-color:#2f6fb5}
+  button.primary:hover{background:#2360a6}
+  button.danger{background:#3a1f22;border-color:#5c2b30}
+  button.danger:hover{background:#4a262a}
+  .row{display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap}
+  .hint{color:var(--dim);font-size:11px;margin-top:6px;line-height:1.5}
+  .hint.ok{color:var(--ok)}
+  .hint.err{color:var(--warn)}
+  code{background:#0d1117;border:1px solid var(--line);border-radius:4px;padding:0 4px}
+</style>
+</head>
+<body>
+<header>
+  <h1>TAXI · Mini Sumo Strategy Designer</h1>
+  <span class="sub">dohyo 77 cm · robot 10×10 cm · import <code>StrategyData.h</code>, draw the openings, export it back</span>
+</header>
+
+<main>
+  <section class="stage">
+    <div class="canvas-wrap">
+      <canvas id="cv"></canvas>
+      <div class="hud" id="hud"></div>
+    </div>
+    <div class="sim-controls" id="simControls"></div>
+  </section>
+
+  <aside>
+    <!-- ================= FILE ================= -->
+    <details open>
+      <summary>Strategy file (StrategyData.h)</summary>
+      <div class="body">
+        <div class="row">
+          <button id="importBtn" class="primary">⬆ Import StrategyData.h</button>
+          <input id="importFile" type="file" accept=".h,.hpp,.txt" style="display:none">
+        </div>
+        <div class="row">
+          <button id="exportBtn">⬇ Export StrategyData.h</button>
+          <button id="clearBtn" class="danger">Clear all</button>
+        </div>
+        <div class="hint">Import <code>TAXI_Firmware/StrategyData.h</code>, edit the openings, then export it back over the same file. There is no JSON — that C++ file is the only copy of the strategies.</div>
+        <div id="fileStatus" class="hint"></div>
+      </div>
+    </details>
+
+    <!-- ================= DOHYO & ROBOT ================= -->
+    <details open>
+      <summary>Dohyo &amp; robot</summary>
+      <div class="body">
+        <div class="grid">
+          <label>Dohyo Ø (cm)<input id="dohyoDiameter" type="number" step="0.5" min="20"></label>
+          <label>Tawara (cm)<input id="tawaraWidth" type="number" step="0.5" min="0"></label>
+          <label>Robot length (cm)<input id="robotLength" type="number" step="0.5" min="1"></label>
+          <label>Robot width (cm)<input id="robotWidth" type="number" step="0.5" min="1"></label>
+          <label>Straight speed (cm/s @100%)<input id="calibStraight" type="number" step="1" min="1"></label>
+          <label>Turn rate (deg/s @full diff)<input id="calibTurn" type="number" step="10" min="10"></label>
+        </div>
+        <div class="hint">Two <b>calibrations</b>, both measured on the real ring: how far it travels in 1 s at 100 % duty straight, and how many degrees it rotates in 1 s at full differential (left +100 / right −100).</div>
+      </div>
+    </details>
+
+    <!-- ================= START ================= -->
+    <details open>
+      <summary>Start position (active slot)</summary>
+      <div class="body">
+        <div class="grid">
+          <label>X (cm)<input id="startX" type="number" step="0.5"></label>
+          <label>Y (cm)<input id="startY" type="number" step="0.5"></label>
+          <label>Heading (°)<input id="startHeading" type="number" step="1"></label>
+        </div>
+        <div class="row">
+          <select id="startPreset">
+            <optgroup label="Bottom half (your side)">
+              <option value="shikiri">Behind shikiri-sen (front edge on the line)</option>
+              <option value="mid">Mid bottom (≈5 cm behind the line)</option>
+              <option value="deep">Deep bottom (near the back of the ring)</option>
+              <option value="bl">Bottom-left lane (facing up)</option>
+              <option value="br">Bottom-right lane (facing up)</option>
+              <option value="bl30">Bottom-left, angled 30° right</option>
+              <option value="br30">Bottom-right, angled 30° left</option>
+              <option value="edge">On tawara (back edge on the border)</option>
+            </optgroup>
+            <optgroup label="Side-by-side start">
+              <option value="left">Behind shikiri-sen (left, facing right)</option>
+              <option value="right">Behind shikiri-sen (right, facing left)</option>
+            </optgroup>
+            <option value="custom">Custom (keep current pose)</option>
+          </select>
+          <button id="applyStartPreset">Apply</button>
+        </div>
+        <div class="hint">This start pose belongs to the <b>active slot</b> and is saved with it in <code>StrategyData.h</code>. Drag the robot on the ring to move it; drag the round handle to rotate. Type exact values in X / Y / Heading for a fully custom pose — the dropdown flips to <b>Custom</b> whenever the pose matches no preset. Heading 0° = up (toward the opponent), positive = clockwise.</div>
+      </div>
+    </details>
+
+    <!-- ================= SLOTS ================= -->
+    <details open>
+      <summary>Strategy slots (DIP 0–7)</summary>
+      <div class="body"><div id="slots"></div></div>
+    </details>
+
+    <!-- ================= READOUT ================= -->
+    <details open>
+      <summary>Simulation readout</summary>
+      <div class="body"><div id="readout"></div></div>
+    </details>
+  </aside>
+</main>
+
+<script src="js/state.js"></script>
+<script src="js/slots.js"></script>
+<script src="js/sim.js"></script>
+<script>
+(function () {
+  "use strict";
+  var T = window.TAXI;
+  var statusEl = document.getElementById("fileStatus");
+
+  function setStatus(msg, cls) {
+    statusEl.textContent = msg || "";
+    statusEl.className = "hint" + (cls ? " " + cls : "");
+  }
+
+  if (!T) {
+    setStatus("state.js failed to load. Open this page from the tools/ folder (js/ must sit next to it).", "err");
+    return;
+  }
+
+  /* ------------------------------------------------- numeric bindings */
+  function bindNum(id, get, set) {
+    var el = document.getElementById(id);
+    el.value = get();
+    el.oninput = function () { set(parseFloat(el.value) || 0); T.emit(); };
+  }
+  bindNum("dohyoDiameter", function () { return T.state.dohyo.diameter; }, function (v) { T.state.dohyo.diameter = v; });
+  bindNum("tawaraWidth",   function () { return T.state.dohyo.tawara; },   function (v) { T.state.dohyo.tawara = v; });
+  bindNum("robotLength",   function () { return T.state.robot.length; },   function (v) { T.state.robot.length = v; });
+  bindNum("robotWidth",    function () { return T.state.robot.width; },    function (v) { T.state.robot.width = v; });
+  bindNum("calibStraight", function () { return T.state.calib.straight; }, function (v) { T.state.calib.straight = v; });
+  bindNum("calibTurn",     function () { return T.state.calib.turn; },     function (v) { T.state.calib.turn = v; });
+  bindNum("startX",        function () { return activeStart().x; },        function (v) { activeStart().x = v; });
+  bindNum("startY",        function () { return activeStart().y; },        function (v) { activeStart().y = v; });
+  bindNum("startHeading",  function () { return activeStart().heading; },  function (v) { activeStart().heading = v; });
+
+  // The start pose lives on the active slot; fall back to the global default
+  // only if a slot somehow lacks one.
+  function activeStart() {
+    var sl = T.state.slots[T.state.active];
+    return (sl && sl.start) ? sl.start : T.state.start;
+  }
+
+  // Refresh the start inputs from state, but never clobber the field the user
+  // is currently typing in (that would steal the caret).
+  function syncStartInputs() {
+    var sp = activeStart();
+    var vals = { startX: sp.x, startY: sp.y, startHeading: sp.heading };
+    Object.keys(vals).forEach(function (id) {
+      var el = document.getElementById(id);
+      if (document.activeElement !== el) el.value = vals[id];
+    });
+  }
+
+  // Named start poses, in the same order as the <select> above. Values are
+  // computed from the live dohyo/robot sizes so they stay legal when those
+  // change. "custom" is a sentinel: it matches nothing and applies nothing.
+  function presetPose(key) {
+    var R = T.state.dohyo.diameter / 2;
+    var behind = 5 + T.state.robot.length / 2;   // front edge on the shikiri-sen
+    switch (key) {
+      case "shikiri": return { x: 0, y: -behind, heading: 0 };
+      case "mid":     return { x: 0, y: -15, heading: 0 };
+      case "deep":    return { x: 0, y: -22, heading: 0 };
+      case "bl":      return { x: -8, y: -15, heading: 0 };
+      case "br":      return { x: 8, y: -15, heading: 0 };
+      case "bl30":    return { x: -8, y: -15, heading: 30 };
+      case "br30":    return { x: 8, y: -15, heading: -30 };
+      case "edge":    return { x: 0, y: -(R - T.state.robot.length / 2), heading: 0 };
+      case "left":    return { x: -behind, y: 0, heading: 90 };
+      case "right":   return { x: behind, y: 0, heading: -90 };
+      default:        return null;
+    }
+  }
+
+  function samePose(a, b) {
+    if (!a || !b) return false;
+    var dh = ((a.heading - b.heading) % 360 + 540) % 360 - 180;   // wrap to -180..180
+    return Math.abs(a.x - b.x) < 0.01 && Math.abs(a.y - b.y) < 0.01 && Math.abs(dh) < 0.01;
+  }
+
+  // Which preset (if any) the current pose corresponds to; "custom" otherwise.
+  function matchPreset(sp) {
+    var keys = ["shikiri", "mid", "deep", "bl", "br", "bl30", "br30", "edge", "left", "right"];
+    for (var i = 0; i < keys.length; i++) {
+      if (samePose(sp, presetPose(keys[i]))) return keys[i];
+    }
+    return "custom";
+  }
+
+  // Reflect the active pose in the dropdown, unless the user is mid-selection.
+  function syncPresetSelect() {
+    var sel = document.getElementById("startPreset");
+    if (document.activeElement === sel) return;
+    var key = matchPreset(activeStart());
+    if (sel.value !== key) sel.value = key;
+  }
+
+  document.getElementById("applyStartPreset").onclick = function () {
+    var pose = presetPose(document.getElementById("startPreset").value);
+    if (pose) {
+      var sp = activeStart();
+      sp.x = pose.x; sp.y = pose.y; sp.heading = pose.heading;
+    }
+    syncStartInputs();
+    T.emit();
+  };
+
+  /* ------------------------------------------------- import / export */
+  var fileInput = document.getElementById("importFile");
+  document.getElementById("importBtn").onclick = function () { fileInput.click(); };
+  fileInput.onchange = function () {
+    var f = fileInput.files[0];
+    if (!f) return;
+    var rd = new FileReader();
+    rd.onload = function () {
+      try {
+        var parsed = T.parseStrategyData(String(rd.result));
+        T.state.slots = parsed.slots;
+        T.state.active = 0;
+        T.state.loaded = true;
+        SlotsUI.render();
+        SimUI.render();
+        syncStartInputs();
+        setStatus("Imported " + f.name + " — 8 slots loaded.", "ok");
+      } catch (e) {
+        setStatus("Import failed: " + e.message, "err");
+      }
+    };
+    rd.readAsText(f);
+    fileInput.value = "";
+  };
+
+  document.getElementById("exportBtn").onclick = function () {
+    var text = T.serializeStrategyData();
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+    a.download = "StrategyData.h";
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setStatus("Exported StrategyData.h — drop it over TAXI_Firmware/StrategyData.h.", "ok");
+  };
+
+  document.getElementById("clearBtn").onclick = function () {
+    T.state.slots = [];
+    T.ensureSlots();
+    T.state.active = 0;
+    T.state.loaded = false;
+    SlotsUI.render();
+    SimUI.render();
+    syncStartInputs();
+    setStatus("Cleared — import StrategyData.h to load strategies.", "");
+  };
+
+  /* ------------------------------------------------------- wire modules */
+  SlotsUI.init(document.getElementById("slots"));
+  SimUI.init({
+    canvas: document.getElementById("cv"),
+    hud: document.getElementById("hud"),
+    readout: document.getElementById("readout"),
+    controls: document.getElementById("simControls")
+  });
+
+  // Any state change re-renders the simulation. The slots module re-renders
+  // itself on structural changes, so we must NOT rebuild it here — that would
+  // steal focus while typing a name or nudging a number. syncStartInputs() is
+  // safe: it skips whichever start field currently has focus.
+  T.on(function () { SimUI.render(); syncStartInputs(); syncPresetSelect(); });
+
+  // Reflect the starting pose in the dropdown before the first edit.
+  syncStartInputs();
+  syncPresetSelect();
+
+  setStatus("No strategies loaded — import StrategyData.h to begin.", "");
+})();
+</script>
+</body>
+</html>

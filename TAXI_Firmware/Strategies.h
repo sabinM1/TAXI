@@ -1,12 +1,46 @@
 /*
- * Strategies.h — DIP-switch selected opening tactics + combat search styles.
+ * Strategies.h — DIP-switch selected opening tactics: types + executor.
  *
  * DIP on D5/D6/D7 (internal pull-ups; switch DOWN reads 1 — see
  * xmotion_basics_101.md). index = (D7<<2)|(D6<<1)|D5, read once at start.
  *
- * Each opening is a timed step list (left%, right%, ms), then combat mode
- * takes over. Each strategy also picks its SEARCH style so openings pair
- * with a sensible hunt pattern.
+ * The opening DATA (the TacticStep arrays, the STRATEGIES[8] table — including
+ * each opening's assumed start pose — and the debug names) lives in
+ * StrategyData.h, which is included below. That file is the single source of
+ * truth and is what tools/strategy-designer.html reads and writes — so the
+ * designer never has to touch the executor logic here.
+ *
+ * ---------------------------------------------------------------------------
+ * HOW AN OPENING WORKS
+ * ---------------------------------------------------------------------------
+ * Each opening is a timed step list (left%, right%, ms) played the instant the
+ * start signal goes HIGH, then combat hands off to SEARCH. The openings are
+ * OPEN-LOOP by design: at the start line the ToF picture is often empty or
+ * unreliable, so a committed move is more predictable than a reactive one.
+ *
+ * The opening ALWAYS runs to completion. The only thing that can interrupt it
+ * is the line-edge override (EVADE) in stateMachineUpdate(), which outranks
+ * every state body — a clipped border aborts the opening, a detected opponent
+ * does not.
+ *
+ * The step model is fully general for a differential drive:
+ *   {100,100,ms}   straight forward
+ *   {-100,-100,ms} straight reverse
+ *   {100,-100,ms}  spin in place (right)
+ *   {100, 30,ms}   arc right (outer wheel faster)
+ *   {0,0,ms}       pause
+ * so any researched opening (rush, turn-and-dash, flank, fake-out, hit-spin)
+ * is just a list of these.
+ *
+ * ---------------------------------------------------------------------------
+ * DESIGNING / TUNING THE OPENINGS
+ * ---------------------------------------------------------------------------
+ * Open tools/strategy-designer.html, import StrategyData.h, draw each opening
+ * on a 77 cm dohyo and export it back. The designer has TWO calibration
+ * numbers, both measured on the real ring:
+ *   - straight speed (cm/s @ 100 % duty), and
+ *   - turn rate (deg/s @ full differential, i.e. left +100 / right -100).
+ * A robot's pivot rate is usually lower than its straight-line speed.
  */
 #ifndef STRATEGIES_H
 #define STRATEGIES_H
@@ -24,37 +58,31 @@ enum SearchStyle : uint8_t { SEARCH_SPIN, SEARCH_ARC, SEARCH_SWEEP };
 struct TacticStep { int8_t leftPct, rightPct; uint16_t ms; };
 
 /**
+ * Where the robot is placed on the dohyo before the start signal.
+ * x/y in cm from the dohyo centre (+x right, +y toward the opponent),
+ * heading in degrees (0 = up, + = clockwise).
+ *
+ * The opening is open-loop, so this does not steer the robot at run time —
+ * it records the placement each opening assumes. It is printed at boot so
+ * the operator knows where to set the robot down for the selected DIP code.
+ */
+struct StartPose { float x, y, heading; };
+
+/**
  * A full opening: a short burst of timed motor steps executed right after
  * the start signal, then combat hands off to SEARCH. The search field
- * also picks which search pattern this opening leads into.
+ * also picks which search pattern this opening leads into, and start
+ * records the placement the opening assumes.
  */
 struct Strategy {
   const TacticStep* steps;
   uint8_t stepCount;
   SearchStyle search;
+  StartPose start;
 };
 
-// The 8 openings. Timings (ms) are calibrated on the bench; keep them
-// short — sensors take over the moment the sequence finishes.
-static const TacticStep s0[] = { {100,100,250} };                        // rush
-static const TacticStep s1[] = { {100,-100,120}, {90,90,400} };          // turn right -> rush
-static const TacticStep s2[] = { {-100,100,120}, {90,90,400} };          // turn left -> rush
-static const TacticStep s3[] = { {-80,80,300} };                         // spin away (safe)
-static const TacticStep s4[] = { {45,80,350}, {80,45,350} };             // arc right sweep
-static const TacticStep s5[] = { {80,45,350}, {45,80,350} };             // arc left sweep
-static const TacticStep s6[] = { {0,0,300}, {100,100,400} };             // wait -> rush (deceptive)
-static const TacticStep s7[] = { {100,30,200}, {30,100,200}, {90,90,250} }; // wiggle trick
-
-static const Strategy STRATEGIES[8] = {
-  { s0, 1, SEARCH_SPIN  },   // 000
-  { s1, 2, SEARCH_ARC   },   // 001
-  { s2, 2, SEARCH_ARC   },   // 010
-  { s3, 1, SEARCH_ARC   },   // 011
-  { s4, 2, SEARCH_SWEEP },   // 100
-  { s5, 2, SEARCH_SWEEP },   // 101
-  { s6, 2, SEARCH_SPIN  },   // 110
-  { s7, 3, SEARCH_SWEEP },   // 111
-};
+// The opening data: TacticStep arrays, STRATEGIES[8], STRATEGY_NAMES[8].
+#include "StrategyData.h"
 
 static uint8_t strategyIndex = 0;
 
@@ -82,7 +110,15 @@ void strategiesInit() {
   delay(2);
   strategyIndex = dipRead() & 7;
 #if SERIAL_DEBUG
-  Serial.print(F("[DIP] strategy ")); Serial.println(strategyIndex);
+  Serial.print(F("[DIP] strategy ")); Serial.print(strategyIndex);
+#if DEBUG_VERBOSE
+  Serial.print(F(" (")); Serial.print(STRATEGY_NAMES[strategyIndex]); Serial.print(')');
+#endif
+  const StartPose& sp = STRATEGIES[strategyIndex].start;
+  // Cast to int: whole-cm guidance is plenty, and it avoids pulling the
+  // float-formatting code into the binary.
+  Serial.print(F(" start (")); Serial.print((int)sp.x); Serial.print(F(", ")); Serial.print((int)sp.y);
+  Serial.print(F(") cm ")); Serial.print((int)sp.heading); Serial.println(F(" deg"));
 #endif
 }
 

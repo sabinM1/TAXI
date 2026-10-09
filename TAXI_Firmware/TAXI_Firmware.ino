@@ -175,6 +175,7 @@ static void debugDump() {
     Serial.print(F(" (")); Serial.print(evadePhaseName()); Serial.print(')');
   }
   Serial.print(F("   Strategy=")); Serial.print(strategyIndex);
+  Serial.print('('); Serial.print(STRATEGY_NAMES[strategyIndex]); Serial.print(')');
   Serial.print(F("  Start=")); Serial.println(digitalRead(PIN_START));
   Serial.print(F(" Bearing=")); Serial.print(targetBearing());
   Serial.print(F("  Contact=")); Serial.print(targetInContact() ? 1 : 0);

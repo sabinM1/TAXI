@@ -559,6 +559,10 @@ void stateMachineUpdate() {
       break;
 
     case ST_TACTIC:
+      // The opening runs to completion. The ONLY thing that can interrupt it is
+      // the line-edge override above (EVADE), which outranks every state body —
+      // so a clipped border still aborts the opening, but a detected opponent
+      // does NOT. The opening is a committed, open-loop move by design.
       if (tacticRun()) {
         gotoState(ST_SEARCH);
         enterSearch();

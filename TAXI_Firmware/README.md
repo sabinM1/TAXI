@@ -119,7 +119,7 @@ loop():  sensorsUpdate()      // 1 ToF read + 1 line pass — ALL serial I/O
 | State | Behavior |
 |---|---|
 | `ST_IDLE` | Motors stopped; waits for start signal HIGH (read raw each loop) |
-| `ST_TACTIC` | Plays the DIP-selected opening timed-step sequence, then → SEARCH |
+| `ST_TACTIC` | Plays the DIP-selected opening timed-step sequence, then → SEARCH. Runs to completion; only the line-edge override (EVADE) can interrupt it |
 | `ST_SEARCH` | Spin/arc/sweep pattern at `SEARCH_SPEED_PCT`; flips direction every 3 s if blind. A sighting **beyond** `TARGET_ENGAGE_MM` is turned onto slowly (same steering law, search speed) without committing; inside `TARGET_ENGAGE_MM` → ATTACK |
 | `ST_ATTACK` | Opponent inside `TARGET_ENGAGE_MM`: speed from the `ATTACK_SPEED_RAMP` table (35 % at the engage distance, 100 % inside `ATTACK_CLOSE_DIST_MM`) + one proportional steering term (`steerToward()`, scaled by base speed, so a hard bearing counter-rotates the inner wheel). All 5 ToF sensors stay polled. At blade contact (≤ `PUSH_CONTACT_DIST_MM` on the middle sensor) both wheels go flat out and the steering trim is skipped |
 | `ST_BACKOFF` | Opponent alongside (a SIDE ToF at ≤ `SIDE_BACKOFF_DIST_MM` **held** for `SIDE_BACKOFF_CONFIRM_MS`): reverse flat out for `SIDE_BACKOFF_MS`, then → SEARCH. Rate-limited by `SIDE_BACKOFF_COOLDOWN_MS`; the line-edge override still outranks it |
@@ -142,6 +142,7 @@ loop():  sensorsUpdate()      // 1 ToF read + 1 line pass — ALL serial I/O
 | | `sensorsHealthyCount()` | ToF sensors currently **answering** on the bus (a sensor with nothing in range is still healthy) |
 | `Strategies.h` | `strategiesInit()` | Read DIP, latch strategy 0–7 |
 | | `tacticRun()` | Non-blocking opening executor |
+| `StrategyData.h` | `STRATEGIES[8]` | The opening data (TacticStep arrays + table + per-opening start pose + debug names). Single source of truth, read/written by `tools/strategy-designer.html` |
 | `StateMachine.h` | `stateMachineUpdate()` | Priority: stop signal > edge > side backoff > state body (sole motor command site) |
 | | `startModuleUpdate()` | Raw start/stop sample — no debounce, by design |
 | | `steerToward(base, bearing)` | **The** steering law: drive at `base`, shift a bearing-scaled differential between the wheels. Used by the attack and by SEARCH's approach leg |
@@ -220,14 +221,16 @@ Expected sketch size: ~12.7 KB flash (44 %), ~0.66 KB RAM — verified compiling
 
 | DIP (D5 D6 D7) | Strategy | Opening | Search style after |
 |---|---|---|---|
-| 000 | 0 | Full-speed rush 250 ms | Spin |
-| 001 | 1 | Pivot right 120 ms → rush | Arc |
-| 010 | 2 | Pivot left 120 ms → rush | Arc |
-| 011 | 3 | Spin away 300 ms (defensive) | Arc |
-| 100 | 4 | Two alternating arcs | Sweep |
-| 101 | 5 | Mirror of 4 | Sweep |
-| 110 | 6 | Wait 300 ms → rush (deceptive) | Spin |
-| 111 | 7 | Zigzag wiggle ×3 | Sweep |
+| 000 | 0 | Rush (dash) 250 ms | Spin |
+| 001 | 1 | Turn-right 120 ms → rush | Arc |
+| 010 | 2 | Turn-left 120 ms → rush | Arc |
+| 011 | 3 | Retreat 200 ms → rush (fake-out) | Spin |
+| 100 | 4 | Angle-45 flank right → rush | Arc |
+| 101 | 5 | Angle-90 side attack → rush | Arc |
+| 110 | 6 | Hit-spin 200 ms → rush | Sweep |
+| 111 | 7 | Wait 300 ms → rush (deceptive) | Spin |
+
+These are the "best of" the researched mini-sumo openings (rush, turn-and-dash, flank, fake-out, hit-spin, deceptive wait). The opening data lives in **`StrategyData.h`** (the single source of truth). Each opening also stores the **start pose** it assumes — `{ x, y, heading }` in cm/deg from the dohyo centre — so a strategy can be designed for a specific placement (centred on the shikiri-sen, off to one side, angled, …). Design and tune it visually with **[`tools/strategy-designer.html`](tools/strategy-designer.html)**: import `StrategyData.h`, pick a slot, drag the robot to that opening's start pose, draw the steps, simulate it with your measured speeds, and export it back over the same file.
 
 2. All speeds are fixed constants in `Config.h` (§7) — the robot has no master-speed knob, so the same DIP selection gives the same run every time.
 3. **Power on with the module in its armed state.** The module saves state in non-volatile memory — if the robot was previously started and never received a stop, the pin will already be HIGH at boot. The firmware detects this, locks in place, and blinks the onboard LED (D8) rapidly: ask the referee for a stop command, then power-cycle.
@@ -294,7 +297,9 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
 - **If the robot evades or spins while the ring clearly shows the opponent, check the `Edge` row first.** `Edge 1 1 1` on the black interior means the line thresholds are wrong for this surface — see §12.
 
 **Opening timings**
-- Each 100 % pivot step ≈ how many ms = 90° on YOUR robot must be measured (`s1`/`s2` use 120 ms as a first guess). Film a run at 120 fps or mark-and-count turns; adjust the step durations in `Strategies.h`.
+- Each 100 % pivot step ≈ how many ms = 90° on YOUR robot must be measured (`s1`/`s2` use 120 ms as a first guess). Film a run at 120 fps or mark-and-count turns; adjust the step durations in `StrategyData.h`.
+- Fastest way to do this: open **[`tools/strategy-designer.html`](tools/strategy-designer.html)**, import `StrategyData.h`, set the two calibrations (**straight speed** in cm/s @ 100 % and **turn rate** in deg/s @ full differential) to your measured values, then drag the robot to its real start position and read the simulated heading / edge-exit time for each opening. The **start pose is per slot** — each opening remembers where it is placed, and that pose is saved back into `StrategyData.h` with the steps. The tool's **probe** readout answers questions like "placed at the bottom middle, how long until it reaches the left edge?" directly — set the probe heading and read the ms.
+- The opening always runs to completion; the only thing that can interrupt it is the line-edge override (EVADE), which outranks every state body.
 
 **Attack steering**
 - If the robot over-corrects and oscillates around the opponent, lower `ATTACK_STEER_GAIN_PCT`; if it drifts off-line while pushing, raise it.
