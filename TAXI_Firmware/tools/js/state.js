@@ -243,15 +243,16 @@ window.TAXI = (function () {
   const MID     = { x: 0, y: -25, heading: 0 };   // ~20 cm behind the line
   const DEEP    = { x: 0, y: -31, heading: 0 };   // near the outer edge
   const BR      = { x: 8, y: -25, heading: 0 };   // bottom-right lane
+  const BL      = { x: -8, y: -25, heading: 0 };  // bottom-left lane
   const PRESETS = [
-    { name: "Rush (dash)",                  search: "SEARCH_SPIN",  steps: [[100, 100, 250]], start: MID },
-    { name: "Turn-right rush",              search: "SEARCH_ARC",   steps: [[100, -100, 120], [100, 100, 400]], start: MID },
-    { name: "Turn-left rush",               search: "SEARCH_ARC",   steps: [[-100, 100, 120], [100, 100, 400]], start: MID },
-    { name: "Retreat-then-attack (fake)",   search: "SEARCH_SPIN",  steps: [[-100, -100, 200], [100, 100, 450]], start: DEEP },
+    { name: "Rush (dash)",                  search: "SEARCH_SPIN",  steps: [[100, 100, 600]], start: MID },
+    { name: "Turn-right rush",              search: "SEARCH_ARC",   steps: [[100, -100, 40], [100, 100, 550]], start: MID },
+    { name: "Turn-left rush",               search: "SEARCH_ARC",   steps: [[-100, 100, 40], [100, 100, 550]], start: MID },
+    { name: "Retreat-then-attack (fake)",   search: "SEARCH_SPIN",  steps: [[-100, -100, 100], [100, 100, 700]], start: MID },
     { name: "Angle-45 flank (right)",       search: "SEARCH_ARC",   steps: [[100, -100, 60], [100, 100, 400]], start: BR },
-    { name: "Angle-90 side attack (right)", search: "SEARCH_ARC",   steps: [[100, -100, 120], [100, 100, 400]], start: BR },
-    { name: "Hit-spin (scan then rush)",    search: "SEARCH_SWEEP", steps: [[90, -90, 240], [100, 100, 300]], start: MID },
-    { name: "Wait-then-rush (deceptive)",   search: "SEARCH_SPIN",  steps: [[0, 0, 300], [100, 100, 400]], start: DEEP },
+    { name: "Angle-45 flank (left)",        search: "SEARCH_ARC",   steps: [[-100, 100, 60], [100, 100, 400]], start: BL },
+    { name: "Hit-spin (scan then rush)",    search: "SEARCH_SWEEP", steps: [[100, -100, 480], [100, 100, 400]], start: MID },
+    { name: "Wait-then-rush (deceptive)",   search: "SEARCH_SPIN",  steps: [[0, 0, 300], [100, 100, 600]], start: DEEP },
   ];
 
   return {

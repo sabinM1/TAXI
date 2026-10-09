@@ -52,21 +52,27 @@ check("every preset start stays inside the dohyo",
 const src = fs.readFileSync("TAXI_Firmware/StrategyData.h", "utf8");
 const parsed = T.parseStrategyData(src);
 check("parsed 8 slots", parsed.slots.length === 8);
-check("slot 0 = Rush {100,100,250}",
+check("slot 0 = Rush {100,100,600}",
   parsed.slots[0].name === "Rush (dash)" && parsed.slots[0].search === "SEARCH_SPIN" &&
-  JSON.stringify(parsed.slots[0].steps) === JSON.stringify([{ left: 100, right: 100, ms: 250 }]),
+  JSON.stringify(parsed.slots[0].steps) === JSON.stringify([{ left: 100, right: 100, ms: 600 }]),
   JSON.stringify(parsed.slots[0]));
 check("slot 6 = Hit-spin SEARCH_SWEEP, 2 steps",
   parsed.slots[6].search === "SEARCH_SWEEP" && parsed.slots[6].steps.length === 2,
   JSON.stringify(parsed.slots[6]));
-check("slot 7 = Wait {0,0,300},{100,100,400}",
-  JSON.stringify(parsed.slots[7].steps) === JSON.stringify([{ left: 0, right: 0, ms: 300 }, { left: 100, right: 100, ms: 400 }]),
+check("slot 7 = Wait {0,0,300},{100,100,600}",
+  JSON.stringify(parsed.slots[7].steps) === JSON.stringify([{ left: 0, right: 0, ms: 300 }, { left: 100, right: 100, ms: 600 }]),
   JSON.stringify(parsed.slots[7].steps));
 check("slot 0 start = (0,-25,0)",
   JSON.stringify(parsed.slots[0].start) === JSON.stringify({ x: 0, y: -25, heading: 0 }),
   JSON.stringify(parsed.slots[0].start));
 check("every slot has a start pose",
   parsed.slots.every(s => s.start && typeof s.start.x === "number" && typeof s.start.heading === "number"));
+check("no opening drives itself off the dohyo",
+  parsed.slots.every(s => {
+    const sim = T.simulate(s.steps, s.start);
+    return !sim.exit && !T.robotOut(sim.endX, sim.endY, sim.endTh);
+  }),
+  parsed.slots.map(s => { const sim = T.simulate(s.steps, s.start); return sim.exit ? "EXIT" : "ok"; }).join(","));
 
 // --- round-trip: serialize then re-parse ---
 T.state.slots = parsed.slots;
@@ -92,8 +98,8 @@ check("output carries start poses", /\{ s0, 1, SEARCH_SPIN, \{ 0, -25, 0 \} \}/.
 
 // --- kinematics sanity ---
 const sim = T.simulate(parsed.slots[1].steps, { x: 0, y: -15, heading: 0 });   // Turn-right rush
-check("slot1 sim: 90deg turn then rush",
-  Math.abs(sim.endTh / T.DEG - 90) < 0.5 && sim.exit === null,
+check("slot1 sim: 30deg turn then rush",
+  Math.abs(sim.endTh / T.DEG - 30) < 0.5 && sim.exit === null,
   "endTh " + (sim.endTh / T.DEG).toFixed(1) + "deg, exit " + (sim.exit ? "yes" : "no"));
 check("straightTimeToEdge(0) ~720ms from the shikiri-sen",
   Math.abs(T.straightTimeToEdge(0, { x: 0, y: -10, heading: 0 }) - 720) < 3,
