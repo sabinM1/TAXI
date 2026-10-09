@@ -20,8 +20,8 @@
  * toward the outer edge. The shikiri-sen is at y = -5 cm, so y = -10 cm is the
  * most forward legal centre for a 10 cm robot; the tawara is part of the dohyo,
  * so y = -33.5 cm is the most rearward legal centre (back edge on the border).
- * The openings start deep (y = -25 to -31 cm) to leave runway to accelerate,
- * turn or flank; only the rush starts on the line.
+ * Every opening starts deep (y = -25 to -31 cm) to leave runway to accelerate,
+ * turn or flank.
  */
 #ifndef STRATEGY_DATA_H
 #define STRATEGY_DATA_H
@@ -44,7 +44,7 @@ static const TacticStep s6[] = { {90,-90,240}, {100,100,300} };
 static const TacticStep s7[] = { {0,0,300}, {100,100,400} };
 
 static const Strategy STRATEGIES[8] = {
-  { s0, 1, SEARCH_SPIN, { 0, -10, 0 } },    // 0: Rush (dash) — front edge on the line
+  { s0, 1, SEARCH_SPIN, { 0, -25, 0 } },    // 0: Rush (dash)
   { s1, 2, SEARCH_ARC, { 0, -25, 0 } },    // 1: Turn-right rush
   { s2, 2, SEARCH_ARC, { 0, -25, 0 } },    // 2: Turn-left rush
   { s3, 2, SEARCH_SPIN, { 0, -31, 0 } },    // 3: Retreat-then-attack (fake)

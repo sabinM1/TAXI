@@ -62,8 +62,8 @@ check("slot 6 = Hit-spin SEARCH_SWEEP, 2 steps",
 check("slot 7 = Wait {0,0,300},{100,100,400}",
   JSON.stringify(parsed.slots[7].steps) === JSON.stringify([{ left: 0, right: 0, ms: 300 }, { left: 100, right: 100, ms: 400 }]),
   JSON.stringify(parsed.slots[7].steps));
-check("slot 0 start = (0,-10,0)",
-  JSON.stringify(parsed.slots[0].start) === JSON.stringify({ x: 0, y: -10, heading: 0 }),
+check("slot 0 start = (0,-25,0)",
+  JSON.stringify(parsed.slots[0].start) === JSON.stringify({ x: 0, y: -25, heading: 0 }),
   JSON.stringify(parsed.slots[0].start));
 check("every slot has a start pose",
   parsed.slots.every(s => s.start && typeof s.start.x === "number" && typeof s.start.heading === "number"));
@@ -88,7 +88,7 @@ check("serialize -> parse round-trip", rt);
 check("output has STRATEGIES[8]", /static const Strategy STRATEGIES\[8\] = \{/.test(out));
 check("output has 8 TacticStep arrays", (out.match(/static const TacticStep s\d\[\]/g) || []).length === 8);
 check("output has STRATEGY_NAMES", /STRATEGY_NAMES\[8\]/.test(out));
-check("output carries start poses", /\{ s0, 1, SEARCH_SPIN, \{ 0, -10, 0 \} \}/.test(out));
+check("output carries start poses", /\{ s0, 1, SEARCH_SPIN, \{ 0, -25, 0 \} \}/.test(out));
 
 // --- kinematics sanity ---
 const sim = T.simulate(parsed.slots[1].steps, { x: 0, y: -15, heading: 0 });   // Turn-right rush

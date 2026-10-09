@@ -238,14 +238,13 @@ window.TAXI = (function () {
   // y = -5 cm, so y = -10 cm is the most forward legal centre for a 10 cm robot;
   // the tawara counts as part of the dohyo, so y = -33.5 cm is the most rearward
   // legal centre. The openings start deep to leave runway to accelerate, turn or
-  // flank; only the rush starts on the line. These mirror the preset list in
-  // strategy-designer.html so the two stay in step.
-  const SHIKIRI = { x: 0, y: -10, heading: 0 };   // front edge on the line
+  // flank. These mirror the preset list in strategy-designer.html so the two
+  // stay in step.
   const MID     = { x: 0, y: -25, heading: 0 };   // ~20 cm behind the line
   const DEEP    = { x: 0, y: -31, heading: 0 };   // near the outer edge
   const BR      = { x: 8, y: -25, heading: 0 };   // bottom-right lane
   const PRESETS = [
-    { name: "Rush (dash)",                  search: "SEARCH_SPIN",  steps: [[100, 100, 250]], start: SHIKIRI },
+    { name: "Rush (dash)",                  search: "SEARCH_SPIN",  steps: [[100, 100, 250]], start: MID },
     { name: "Turn-right rush",              search: "SEARCH_ARC",   steps: [[100, -100, 120], [100, 100, 400]], start: MID },
     { name: "Turn-left rush",               search: "SEARCH_ARC",   steps: [[-100, 100, 120], [100, 100, 400]], start: MID },
     { name: "Retreat-then-attack (fake)",   search: "SEARCH_SPIN",  steps: [[-100, -100, 200], [100, 100, 450]], start: DEEP },
