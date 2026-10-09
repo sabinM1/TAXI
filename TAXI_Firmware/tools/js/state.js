@@ -258,20 +258,20 @@ window.TAXI = (function () {
   const MID     = { x: 0, y: -25, heading: 0 };    // centred, facing up
   const ANG_R   = { x: 0, y: -25, heading: 30 };   // placed already angled right
   const ANG_L   = { x: 0, y: -25, heading: -30 };  // placed already angled left
-  const EDGE_R  = { x: -8, y: -25, heading: 90 };  // left lane, facing right along the edge
-  const EDGE_L  = { x: 8, y: -25, heading: -90 };  // right lane, facing left along the edge
   const FLANK_R = { x: 8, y: -25, heading: 45 };   // right lane, angled out
   const FLANK_L = { x: -8, y: -25, heading: -45 }; // left lane, angled out
+  const EDGE_R  = { x: 8, y: -25, heading: 90 };   // right lane, facing right along the edge
+  const EDGE_L  = { x: -8, y: -25, heading: -90 }; // left lane, facing left along the edge
   const BAIT_R  = { x: 0, y: -25, heading: 30 };   // centred, angled right
   const PRESETS = [
     { name: "Rush (dash)",            search: "SEARCH_SPIN", steps: [[100, 100, 600]], start: MID },
     { name: "Angled rush (right)",    search: "SEARCH_ARC",  steps: [[100, 100, 550]], start: ANG_R },
     { name: "Angled rush (left)",     search: "SEARCH_ARC",  steps: [[100, 100, 550]], start: ANG_L },
-    { name: "Edge flank (right)",     search: "SEARCH_ARC",  steps: [[60, 100, 900], [-100, 100, 130]], start: EDGE_R },
     { name: "Flank (right)",          search: "SEARCH_ARC",  steps: [[100, 100, 200], [-100, 100, 120]], start: FLANK_R },
     { name: "Flank (left)",           search: "SEARCH_ARC",  steps: [[100, 100, 200], [100, -100, 120]], start: FLANK_L },
+    { name: "Edge flank (right)",     search: "SEARCH_ARC",  steps: [[60, 100, 1200], [-100, 100, 73]], start: EDGE_R },
+    { name: "Edge flank (left)",      search: "SEARCH_ARC",  steps: [[100, 60, 1200], [100, -100, 73]], start: EDGE_L },
     { name: "Bait-and-flank (right)", search: "SEARCH_ARC",  steps: [[-100, -100, 80], [100, 100, 600]], start: BAIT_R },
-    { name: "Edge flank (left)",      search: "SEARCH_ARC",  steps: [[100, 60, 900], [100, -100, 130]], start: EDGE_L },
   ];
 
   return {

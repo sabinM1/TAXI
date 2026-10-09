@@ -31,20 +31,20 @@
  *
  * Openings that would otherwise turn to a heading now START at that heading
  * instead: the operator places the robot already angled, so no time or precision
- * is spent pivoting. Slots 1/2 start at +/-30 deg, slots 4/5 at +/-45 deg, and
- * the edge flanks (3/7) at +/-90 deg.
+ * is spent pivoting. Slots 1/2 start at +/-30 deg, slots 3/4 at +/-45 deg, and
+ * the edge flanks (5/6) at +/-90 deg.
  *
  * The last field of each row is handoffMs: 65% of the opening's total time,
  * computed by the designer at export. After that point a close opponent outranks
  * the committed move (see ST_TACTIC) — the opening is open-loop, but it must not
  * drive past a target it can already see.
  *
- * The set, and what each is for:
+ * The set, and what each is for (right/left pairs sit next to each other):
  *   0 Rush (dash)              straight bull rush, reaches past mid-ring
  *   1/2 Angled rush            30 deg start, long angled rush
- *   3/7 Edge flank             90 deg start, arc up the side, end facing the middle
- *   4/5 Flank                  45 deg start, rush out, then turn onto the middle
- *   6 Bait-and-flank           short reverse to bait, then flank right
+ *   3/4 Flank                  45 deg start, rush out, then turn onto the middle
+ *   5/6 Edge flank             90 deg start, arc up the side, end facing the middle
+ *   7 Bait-and-flank           short reverse to bait, then flank right
  */
 #ifndef STRATEGY_DATA_H
 #define STRATEGY_DATA_H
@@ -55,26 +55,26 @@ static const TacticStep s0[] = { {100,100,600} };
 static const TacticStep s1[] = { {100,100,550} };
 // slot 2: Angled rush (left)
 static const TacticStep s2[] = { {100,100,550} };
-// slot 3: Edge flank (right)
-static const TacticStep s3[] = { {60,100,900}, {-100,100,130} };
-// slot 4: Flank (right)
-static const TacticStep s4[] = { {100,100,200}, {-100,100,120} };
-// slot 5: Flank (left)
-static const TacticStep s5[] = { {100,100,200}, {100,-100,120} };
-// slot 6: Bait-and-flank (right)
-static const TacticStep s6[] = { {-100,-100,80}, {100,100,600} };
-// slot 7: Edge flank (left)
-static const TacticStep s7[] = { {100,60,900}, {100,-100,130} };
+// slot 3: Flank (right)
+static const TacticStep s3[] = { {100,100,200}, {-100,100,120} };
+// slot 4: Flank (left)
+static const TacticStep s4[] = { {100,100,200}, {100,-100,120} };
+// slot 5: Edge flank (right)
+static const TacticStep s5[] = { {60,100,1200}, {-100,100,73} };
+// slot 6: Edge flank (left)
+static const TacticStep s6[] = { {100,60,1200}, {100,-100,73} };
+// slot 7: Bait-and-flank (right)
+static const TacticStep s7[] = { {-100,-100,80}, {100,100,600} };
 
 static const Strategy STRATEGIES[8] = {
   { s0, 1, SEARCH_SPIN,  { 0, -25, 0 },    390 },    // 0: Rush (dash)
   { s1, 1, SEARCH_ARC,   { 0, -25, 30 },   358 },    // 1: Angled rush (right)
   { s2, 1, SEARCH_ARC,   { 0, -25, -30 },  358 },    // 2: Angled rush (left)
-  { s3, 2, SEARCH_ARC,   { -8, -25, 90 },  670 },    // 3: Edge flank (right)
-  { s4, 2, SEARCH_ARC,   { 8, -25, 45 },   208 },    // 4: Flank (right)
-  { s5, 2, SEARCH_ARC,   { -8, -25, -45 }, 208 },    // 5: Flank (left)
-  { s6, 2, SEARCH_ARC,   { 0, -25, 30 },   442 },    // 6: Bait-and-flank (right)
-  { s7, 2, SEARCH_ARC,   { 8, -25, -90 },  670 },    // 7: Edge flank (left)
+  { s3, 2, SEARCH_ARC,   { 8, -25, 45 },   208 },    // 3: Flank (right)
+  { s4, 2, SEARCH_ARC,   { -8, -25, -45 }, 208 },    // 4: Flank (left)
+  { s5, 2, SEARCH_ARC,   { 8, -25, 90 },   827 },    // 5: Edge flank (right)
+  { s6, 2, SEARCH_ARC,   { -8, -25, -90 }, 827 },    // 6: Edge flank (left)
+  { s7, 2, SEARCH_ARC,   { 0, -25, 30 },   442 },    // 7: Bait-and-flank (right)
 };
 
 #if DEBUG_VERBOSE
@@ -83,11 +83,11 @@ static const char* const STRATEGY_NAMES[8] = {
   "Rush (dash)",
   "Angled rush (right)",
   "Angled rush (left)",
-  "Edge flank (right)",
   "Flank (right)",
   "Flank (left)",
-  "Bait-and-flank (right)",
-  "Edge flank (left)"
+  "Edge flank (right)",
+  "Edge flank (left)",
+  "Bait-and-flank (right)"
 };
 #endif
 
