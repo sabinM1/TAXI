@@ -40,7 +40,7 @@ window.TAXI = (function () {
 
   function cloneStart(s) { return { x: s.x, y: s.y, heading: s.heading }; }
   function newSlot() {
-    return { name: "", search: "SEARCH_SPIN", steps: [], start: cloneStart(state.start) };
+    return { name: "", search: "SEARCH_SPIN", steps: [], start: cloneStart(state.start), blind: false };
   }
   function ensureSlots() {
     while (state.slots.length < 8) state.slots.push(newSlot());
@@ -147,6 +147,7 @@ window.TAXI = (function () {
           start: (rm[4] !== undefined)
             ? { x: +rm[4], y: +rm[5], heading: +rm[6] }
             : null,
+          handoffMs: (rm[7] !== undefined) ? +rm[7] : null,
         };
       }
     }
@@ -166,6 +167,7 @@ window.TAXI = (function () {
         search: (rows[i] && rows[i].search) || "SEARCH_SPIN",
         steps: arrays[i] || [],
         start: (rows[i] && rows[i].start) ? rows[i].start : cloneStart(state.start),
+        blind: !!(rows[i] && rows[i].handoffMs === 0),
       });
     }
     return { slots };
@@ -184,11 +186,15 @@ window.TAXI = (function () {
   // 65% of an opening's total time: after this much has run, a close opponent
   // outranks the committed move (see ST_TACTIC in StateMachine.h). Computed here,
   // at export, so the firmware never has to add the steps up.
+  //
+  // A slot marked `blind` exports 0 instead, the sentinel for "never hand off":
+  // the opening ignores the ToF for its whole duration.
   const HANDOFF_FRACTION = 0.65;
   function slotTotalMs(sl) {
     return (sl.steps || []).reduce((a, st) => a + (st.ms || 0), 0);
   }
   function slotHandoffMs(sl) {
+    if (sl.blind) return 0;
     return Math.round(slotTotalMs(sl) * HANDOFF_FRACTION);
   }
 
@@ -269,8 +275,8 @@ window.TAXI = (function () {
     { name: "Angled rush (left)",     search: "SEARCH_ARC",  steps: [[100, 100, 550]], start: ANG_L },
     { name: "Flank (right)",          search: "SEARCH_ARC",  steps: [[100, 100, 200], [-100, 100, 120]], start: FLANK_R },
     { name: "Flank (left)",           search: "SEARCH_ARC",  steps: [[100, 100, 200], [100, -100, 120]], start: FLANK_L },
-    { name: "Edge flank (right)",     search: "SEARCH_ARC",  steps: [[60, 100, 1200], [-100, 100, 73]], start: EDGE_R },
-    { name: "Edge flank (left)",      search: "SEARCH_ARC",  steps: [[100, 60, 1200], [100, -100, 73]], start: EDGE_L },
+    { name: "Edge flank (right)",     search: "SEARCH_ARC",  steps: [[60, 100, 1333], [-100, 100, 90]], start: EDGE_R, blind: true },
+    { name: "Edge flank (left)",      search: "SEARCH_ARC",  steps: [[100, 60, 1333], [100, -100, 90]], start: EDGE_L, blind: true },
     { name: "Bait-and-flank (right)", search: "SEARCH_ARC",  steps: [[-100, -100, 80], [100, 100, 600]], start: BAIT_R },
   ];
 

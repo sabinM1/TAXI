@@ -565,7 +565,11 @@ void stateMachineUpdate() {
       // opening is open-loop, but it must not drive past a target it can already
       // see — this is the same sighting + range test ST_SEARCH commits on, so the
       // handoff lands in ST_ATTACK exactly as a normal sighting would.
-      if (tacticElapsedMs() >= STRATEGIES[strategyIndex].handoffMs) {
+      //
+      // handoffMs == 0 means the opening runs fully blind (no ToF handoff at all),
+      // used by the edge flanks whose sweep must complete.
+      if (STRATEGIES[strategyIndex].handoffMs != 0 &&
+          tacticElapsedMs() >= STRATEGIES[strategyIndex].handoffMs) {
         int8_t sighted = sensorsOpponent();
         bool ok; uint16_t mm = sensorsClosestMm(&ok);
         if (sighted != 127 && ok && mm <= TARGET_ENGAGE_MM) {

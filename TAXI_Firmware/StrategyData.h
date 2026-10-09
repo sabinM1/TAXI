@@ -37,13 +37,16 @@
  * The last field of each row is handoffMs: 65% of the opening's total time,
  * computed by the designer at export. After that point a close opponent outranks
  * the committed move (see ST_TACTIC) — the opening is open-loop, but it must not
- * drive past a target it can already see.
+ * drive past a target it can already see. A value of 0 means NEVER hand off: the
+ * opening runs fully blind, ignoring the ToF for its whole duration. The edge
+ * flanks (5/6) use 0, since their sweep must complete to end up behind the
+ * opponent.
  *
  * The set, and what each is for (right/left pairs sit next to each other):
  *   0 Rush (dash)              straight bull rush, reaches past mid-ring
  *   1/2 Angled rush            30 deg start, long angled rush
  *   3/4 Flank                  45 deg start, rush out, then turn onto the middle
- *   5/6 Edge flank             90 deg start, arc up the side, end facing the middle
+ *   5/6 Edge flank             90 deg start, 200 deg arc up the side, blind
  *   7 Bait-and-flank           short reverse to bait, then flank right
  */
 #ifndef STRATEGY_DATA_H
@@ -60,9 +63,9 @@ static const TacticStep s3[] = { {100,100,200}, {-100,100,120} };
 // slot 4: Flank (left)
 static const TacticStep s4[] = { {100,100,200}, {100,-100,120} };
 // slot 5: Edge flank (right)
-static const TacticStep s5[] = { {60,100,1200}, {-100,100,73} };
+static const TacticStep s5[] = { {60,100,1333}, {-100,100,90} };
 // slot 6: Edge flank (left)
-static const TacticStep s6[] = { {100,60,1200}, {100,-100,73} };
+static const TacticStep s6[] = { {100,60,1333}, {100,-100,90} };
 // slot 7: Bait-and-flank (right)
 static const TacticStep s7[] = { {-100,-100,80}, {100,100,600} };
 
@@ -72,8 +75,8 @@ static const Strategy STRATEGIES[8] = {
   { s2, 1, SEARCH_ARC,   { 0, -25, -30 },  358 },    // 2: Angled rush (left)
   { s3, 2, SEARCH_ARC,   { 8, -25, 45 },   208 },    // 3: Flank (right)
   { s4, 2, SEARCH_ARC,   { -8, -25, -45 }, 208 },    // 4: Flank (left)
-  { s5, 2, SEARCH_ARC,   { 8, -25, 90 },   827 },    // 5: Edge flank (right)
-  { s6, 2, SEARCH_ARC,   { -8, -25, -90 }, 827 },    // 6: Edge flank (left)
+  { s5, 2, SEARCH_ARC,   { 8, -25, 90 },   0 },      // 5: Edge flank (right) — blind
+  { s6, 2, SEARCH_ARC,   { -8, -25, -90 }, 0 },      // 6: Edge flank (left) — blind
   { s7, 2, SEARCH_ARC,   { 0, -25, 30 },   442 },    // 7: Bait-and-flank (right)
 };
 

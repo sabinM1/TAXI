@@ -337,6 +337,28 @@
     ed.appendChild(srow);
     startInputs = [sxInp, syInp, shInp];
 
+    /* blind: run the whole opening without the ToF handoff */
+    var brow = document.createElement("div");
+    brow.className = "sl-row";
+    var blindField = field("ToF handoff");
+    var blindLbl = document.createElement("label");
+    blindLbl.className = "sl-check";
+    var blindChk = document.createElement("input");
+    blindChk.type = "checkbox";
+    blindChk.checked = !!slot.blind;
+    blindChk.addEventListener("change", function () {
+      slot.blind = blindChk.checked;
+      T().emit();
+      refreshCards();
+    });
+    blindLbl.appendChild(blindChk);
+    var blindTxt = document.createElement("span");
+    blindTxt.textContent = "run blind \u2014 ignore the ToF for the whole opening";
+    blindLbl.appendChild(blindTxt);
+    blindField.appendChild(blindLbl);
+    brow.appendChild(blindField);
+    ed.appendChild(brow);
+
     /* preset loader */
     var prow = document.createElement("div");
     prow.className = "sl-row";
@@ -534,6 +556,7 @@
       ".sl-step--head{font-size:11px;color:var(--dim);background:var(--panel);}",
       ".sl-step-idx{color:var(--dim);font-family:ui-monospace,Consolas,monospace;text-align:center;}",
       ".sl-num{width:100%;}",
+      ".sl-check{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--txt);cursor:pointer;}",
       ".sl-step-btns{display:flex;gap:4px;}",
       ".sl-step-empty{padding:12px;color:var(--dim);font-style:italic;}",
       ".sl-btn{background:var(--panel);border:1px solid var(--line);color:var(--txt);",

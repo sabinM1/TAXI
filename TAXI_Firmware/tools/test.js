@@ -58,7 +58,7 @@ check("slot 0 = Rush {100,100,600}",
   JSON.stringify(parsed.slots[0]));
 check("slot 6 = Edge flank (left) arc + turn",
   parsed.slots[6].search === "SEARCH_ARC" && parsed.slots[6].steps.length === 2 &&
-  JSON.stringify(parsed.slots[6].steps) === JSON.stringify([{ left: 100, right: 60, ms: 1200 }, { left: 100, right: -100, ms: 73 }]),
+  JSON.stringify(parsed.slots[6].steps) === JSON.stringify([{ left: 100, right: 60, ms: 1333 }, { left: 100, right: -100, ms: 90 }]),
   JSON.stringify(parsed.slots[6]));
 check("slot 7 = Bait-and-flank reverse + rush",
   JSON.stringify(parsed.slots[7].steps) === JSON.stringify([{ left: -100, right: -100, ms: 80 }, { left: 100, right: 100, ms: 600 }]),
@@ -74,9 +74,12 @@ check("no opening drives itself off the dohyo",
     return !sim.exit && !T.robotOut(sim.endX, sim.endY, sim.endTh);
   }),
   parsed.slots.map(s => { const sim = T.simulate(s.steps, s.start); return sim.exit ? "EXIT" : "ok"; }).join(","));
-check("handoff is 65% of each opening's total time",
-  parsed.slots.every(s => T.slotHandoffMs(s) === Math.round(T.slotTotalMs(s) * 0.65)),
+check("handoff is 65% of each opening's total time (0 = blind)",
+  parsed.slots.every(s => s.blind ? T.slotHandoffMs(s) === 0 : T.slotHandoffMs(s) === Math.round(T.slotTotalMs(s) * 0.65)),
   parsed.slots.map(s => T.slotHandoffMs(s)).join(","));
+check("edge flanks run blind (handoff 0)",
+  parsed.slots[5].blind === true && parsed.slots[6].blind === true &&
+  T.slotHandoffMs(parsed.slots[5]) === 0 && T.slotHandoffMs(parsed.slots[6]) === 0);
 check("turning openings start already angled",
   parsed.slots[1].start.heading === 30 && parsed.slots[2].start.heading === -30 &&
   parsed.slots[3].start.heading === 45 && parsed.slots[4].start.heading === -45 &&
@@ -92,7 +95,7 @@ let rt = true;
 for (let i = 0; i < 8; i++) {
   const a = parsed.slots[i], b = parsed2.slots[i];
   if (a.name !== b.name || a.search !== b.search || JSON.stringify(a.steps) !== JSON.stringify(b.steps) ||
-      JSON.stringify(a.start) !== JSON.stringify(b.start)) {
+      JSON.stringify(a.start) !== JSON.stringify(b.start) || !!a.blind !== !!b.blind) {
     rt = false;
     console.log("  MISMATCH slot " + i + ": " + JSON.stringify(a) + " vs " + JSON.stringify(b));
   }

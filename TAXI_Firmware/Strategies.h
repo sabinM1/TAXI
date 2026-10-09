@@ -78,6 +78,10 @@ struct StartPose { float x, y, heading; };
  * designer at export. Once that much of the opening has run, a close opponent
  * outranks the committed move: the opening is open-loop, but it must not drive
  * past a target it can already see (see the ST_TACTIC case).
+ *
+ * handoffMs == 0 is a sentinel meaning NEVER hand off: the opening runs fully
+ * blind, ignoring the ToF for its whole duration. The edge flanks use it, since
+ * their sweep must complete to end up behind the opponent.
  */
 struct Strategy {
   const TacticStep* steps;
