@@ -13,7 +13,9 @@
  *   explicitly time-based ('s' and 'b').
  *
  * HOW TO USE IT
- *   'h' prints the menu. The three commands that answer most questions:
+ *   'h' prints the menu. 'p' runs the GUIDED black-vs-white tuning procedure
+ *   step by step (it tells you what to place where, waits for a key, then runs
+ *   the matching measurement). The three commands that answer most questions:
  *
  *     l      LIVE table: every ToF sensor, the line sensors, the motors, the
  *            bearing the MATCH firmware would compute from this exact scene, and
@@ -69,6 +71,11 @@
 #include "Motor.h"
 #include "Sensors.h"           // ToF bus + line sensors + the firmware's own readers
 #include "RingInfoDisplay.h"
+
+// Forward declaration: the full struct is defined lower down, but Arduino
+// inserts its auto-generated function prototypes right after the includes, so
+// the type has to be visible here or those prototypes fail to compile.
+struct SensorStats;
 
 // ============================================================================
 //                             BENCH SETTINGS
@@ -453,7 +460,7 @@ static void cmdBus() {
     Serial.print(F("us  max ")); pad(maxUs, 7); Serial.println(F("us"));
   }
   Serial.print(F(" (a miss costs the full ")); Serial.print(TOF_TIMEOUT_MS);
-  Serial.println(F(" ms timeout, so avg ~15000us means no sensor there)"));
+  Serial.println(F(" ms timeout)"));
   sep();
 }
 
@@ -481,15 +488,15 @@ static void cmdRegs(uint8_t id) {
 static void cmdConfig(uint8_t id) {
   DistanceSensor& s = tofSensors[id - 1];
   static const struct { uint8_t reg; const char* name; } R[] = {
-    { 0x80, "I/O mode      " }, { 0x81, "Serial id     " },
-    { 0x82, "Serial baud   " }, { 0x83, "reserved      " },
-    { 0x84, "reserved      " }, { 0xB0, "Sampling ms   " },
-    { 0xB1, "Offset corr   " }, { 0xB2, "Crosstalk corr" },
-    { 0xB3, "Linear corr   " }, { 0xB4, "Range checks  " },
-    { 0xB5, "Signal thr    " }, { 0xB6, "Sigma thr mm  " },
-    { 0xB7, "Min dist mm   " }, { 0xB8, "Max dist mm   " },
-    { 0xBA, "Detection mode" }, { 0xBB, "Det invert    " },
-    { 0xBC, "Det lower mm  " }, { 0xBD, "Det upper mm  " },
+    { 0x80, "I/O mode" }, { 0x81, "Serial id" },
+    { 0x82, "Serial baud" }, { 0x83, "reserved" },
+    { 0x84, "reserved" }, { 0xB0, "Sampling ms" },
+    { 0xB1, "Offset corr" }, { 0xB2, "Crosstalk corr" },
+    { 0xB3, "Linear corr" }, { 0xB4, "Range checks" },
+    { 0xB5, "Signal thr" }, { 0xB6, "Sigma thr mm" },
+    { 0xB7, "Min dist mm" }, { 0xB8, "Max dist mm" },
+    { 0xBA, "Detection mode" }, { 0xBB, "Det invert" },
+    { 0xBC, "Det lower mm" }, { 0xBD, "Det upper mm" },
   };
 
   sep();
@@ -503,7 +510,7 @@ static void cmdConfig(uint8_t id) {
     uint16_t v = 0;
     if (!s.readRegister(R[i].reg, &v)) continue;
     Serial.print(F("   ")); hexN(R[i].reg, 2);
-    Serial.print(' '); Serial.print(R[i].name); Serial.print(' ');
+    Serial.print(' '); padStr(R[i].name, 14); Serial.print(' ');
     hexN(v, (v > 0xFF) ? 4 : 2);
     Serial.print(F("  ("));
     if (R[i].reg == 0xB4) printRangeChecks(v);
@@ -522,47 +529,395 @@ static void cmdConfigAll() {
 static void cmdInfo() {
   sep();
   Serial.println(F(" [info]"));
-  Serial.print(F("   ToF bus    D")); Serial.print(PIN_TOF_BUS);
+  Serial.print(F("   ToF D")); Serial.print(PIN_TOF_BUS);
   Serial.print(F(" @ ")); Serial.print(TOF_BUS_BAUD);
   Serial.print(F(" baud, timeout ")); Serial.print(TOF_TIMEOUT_MS);
   Serial.print(F(" ms, ")); Serial.print(TOF_SENSOR_COUNT);
-  Serial.println(F(" sensors. id3=mm 0x01, others=cm 0x06"));
-  Serial.print(F("   valid win  ")); Serial.print(TOF_MIN_VALID_MM);
+  Serial.println(F(" sensors (id3=mm 0x01, rest=cm 0x06)"));
+  Serial.print(F("   valid ")); Serial.print(TOF_MIN_VALID_MM);
   Serial.print(F("..")); Serial.print(TOF_MAX_VALID_MM);
-  Serial.println(F(" mm (firmware window - a sensor beyond this reads ---)"));
-  Serial.print(F("   motor      LM_PWM=D")); Serial.print(PIN_LM_PWM);
+  Serial.println(F(" mm (beyond this reads ---)"));
+  Serial.print(F("   motor LM_PWM=D")); Serial.print(PIN_LM_PWM);
   Serial.print(F(" LM_DIR=D")); Serial.print(PIN_LM_DIR);
-  Serial.print(F("  RM_PWM=D")); Serial.print(PIN_RM_PWM);
+  Serial.print(F(" RM_PWM=D")); Serial.print(PIN_RM_PWM);
   Serial.print(F(" RM_DIR=D")); Serial.print(PIN_RM_DIR);
-  Serial.print(F("  invert L/R=")); Serial.print(LM_INVERTED);
+  Serial.print(F(" inv L/R=")); Serial.print(LM_INVERTED);
   Serial.print('/'); Serial.println(RM_INVERTED);
-  Serial.print(F("   trim       LM=")); Serial.print(LM_TRIM_PCT);
+  Serial.print(F("   trim LM=")); Serial.print(LM_TRIM_PCT);
   Serial.print(F("% RM=")); Serial.print(RM_TRIM_PCT);
-  Serial.print(F("%   bench cap ")); Serial.print(BENCH_MAX_PCT); Serial.println('%');
-  Serial.print(F("   line       L=A")); Serial.print(PIN_LINE_L - A0);
-  Serial.print(F("(thr ")); Serial.print(LINE_LEFT_WHITE_THRESHOLD);
+  Serial.print(F("%  bench cap ")); Serial.print(BENCH_MAX_PCT); Serial.println('%');
+  Serial.print(F("   line L=A")); Serial.print(PIN_LINE_L - A0);
+  Serial.print(F("(")); Serial.print(LINE_LEFT_WHITE_THRESHOLD);
   Serial.print(F(") R=A")); Serial.print(PIN_LINE_R - A0);
-  Serial.print(F("(thr ")); Serial.print(LINE_RIGHT_WHITE_THRESHOLD);
+  Serial.print(F("(")); Serial.print(LINE_RIGHT_WHITE_THRESHOLD);
   Serial.print(F(") rear=A")); Serial.print(PIN_LINE_B - A0);
-  Serial.print(F("(thr ")); Serial.print(LINE_REAR_WHITE_THRESHOLD);
+  Serial.print(F("(")); Serial.print(LINE_REAR_WHITE_THRESHOLD);
   Serial.println(F(")  edge = raw BELOW thr"));
-  Serial.print(F("   ring       A2, 7 LEDs   LED1/2 = D"));
+  Serial.print(F("   ring A2, 7 LEDs  LED1/2=D"));
   Serial.print(PIN_LED1); Serial.print("/D"); Serial.println(PIN_LED2);
 
   // DIP: the pin reads 1 for the OFF (down) position, so the strategy index is
   // the INVERSE of the raw pins. Printing both makes a wiring/polarity mistake
   // obvious instead of silently changing which opening runs.
   uint8_t d1 = digitalRead(PIN_DIP1), d2 = digitalRead(PIN_DIP2), d3 = digitalRead(PIN_DIP3);
-  Serial.print(F("   DIP        raw D5,D6,D7="));
+  Serial.print(F("   DIP raw D5,D6,D7="));
   Serial.print(d1); Serial.print(','); Serial.print(d2); Serial.print(','); Serial.print(d3);
   uint8_t idx = ((d1 ? 0 : 1)) | ((d2 ? 0 : 2)) | ((d3 ? 0 : 4));
-  Serial.print(F("  -> strategy ")); Serial.println(idx);
+  Serial.print(F(" -> strategy ")); Serial.println(idx);
 
-  Serial.print(F("   start      A0 = ")); Serial.print(digitalRead(PIN_START));
-  Serial.println(F("   (1 = module says FIGHT, 0 = armed) - NOT obeyed by this tool"));
-  Serial.print(F("   loop       ")); Serial.print(gLoopUs);
-  Serial.print(F(" us/iteration, last sensor sweep ")); Serial.print(gSweepUs);
+  Serial.print(F("   start A0=")); Serial.print(digitalRead(PIN_START));
+  Serial.println(F(" (1=FIGHT, 0=armed) - NOT obeyed here"));
+  Serial.print(F("   loop ")); Serial.print(gLoopUs);
+  Serial.print(F(" us, sweep ")); Serial.print(gSweepUs);
   Serial.println(F(" us"));
+  sep();
+}
+
+// ============================================================================
+//              COMPACT CSV CHARACTERISATION  (ToF tuning support)
+// ============================================================================
+//
+// These commands exist so a tuning session produces a few short, machine-
+// readable lines per step instead of a wall of human tables. Every line starts
+// with a tag (X / K / A / g) and is comma-separated, so a whole run can be
+// pasted back verbatim.
+//
+//   g <id>                 one CSV line: the config registers 0x80..0xBD
+//   x <id> [ms]            one CSV line: signal/sigma/distance stats for ONE
+//                          sensor over [ms] (default id 3, 1500 ms). This is the
+//                          black-vs-white workhorse: park the target, run 'x 3',
+//                          swap black<->white, run 'x 3' again, compare.
+//   K <id> <reg> <v..> [w<ms>] [keep]
+//                          write <reg> through a list of values, sampling after
+//                          each and printing one CSV row per value. Restores the
+//                          original value at the end unless 'keep'. This is how
+//                          sampling time (B0), signal threshold (B5) and sigma
+//                          threshold (B6) get swept in a single command.
+//   A <reg> <val> [<reg> <val> ..]
+//                          apply the winning register/value pairs to ALL five
+//                          sensors and save each one (non-volatile).
+//
+// CSV columns (after the tag/id/reg/val prefix):
+//   samples, ans, valid, sigMin, sigAvg, sigMax, thr, ratio%, ambAvg, sigmaAvg,
+//   dMin, dMax, dAvg, dStd, readUsAvg, readUsMax
+//     ans    = reads that got a reply (bus health)
+//     valid  = readings the sensor's own check AND the firmware window accept
+//     thr    = signal threshold reg 0xB5 currently in force
+//     ratio% = sigMax as a percentage of thr  (>100 = comfortably detected)
+//     dStd   = distance standard deviation in mm over the valid samples
+//     readUs = per-read latency on the shared bus (avg / worst case)
+
+#define SWEEP_DEFAULT_MS  800    // 'K' sampling window per value
+#define SWEEP_MAX_VALUES  16     // max values in one 'K' sweep
+
+struct SensorStats {
+  uint16_t samples;
+  uint16_t ans;
+  uint16_t valid;
+  uint16_t sigMin, sigMax;
+  uint32_t sigSum;
+  uint32_t ambSum, sigmaSum;
+  uint16_t dMin, dMax;
+  uint32_t dSum, dSumSq;
+  uint32_t readUsSum, readUsMax;
+};
+
+/** Sample ONE sensor for windowMs, filling st. Index-based (0..4), matching
+ *  tofSensors[] and distReg(). */
+static void sampleOne(uint8_t i, uint16_t windowMs, SensorStats& st) {
+  DistanceSensor& s = tofSensors[i];
+  st.samples = st.ans = st.valid = 0;
+  st.sigMin = 0xFFFF; st.sigMax = 0; st.sigSum = 0;
+  st.ambSum = st.sigmaSum = 0;
+  st.dMin = 0xFFFF; st.dMax = 0; st.dSum = 0; st.dSumSq = 0;
+  st.readUsSum = 0; st.readUsMax = 0;
+
+  uint32_t t0 = millis();
+  while (millis() - t0 < windowMs) {
+    uint32_t r0 = micros();
+    uint16_t raw = 0;
+    bool ans = s.readRegister(distReg(i), &raw);
+    uint32_t dt = micros() - r0;
+    st.readUsSum += dt;
+    if (dt > st.readUsMax) st.readUsMax = dt;
+    st.samples++;
+    if (!ans) continue;
+    st.ans++;
+
+    // Same measurement, pulled apart: signal is the money number, sigma is the
+    // noise, status bit 0 is the sensor's own accept/reject decision.
+    uint16_t sig = 0, amb = 0, sgm = 0, status = 0;
+    s.readRegister(0x02, &sig);
+    s.readRegister(0x03, &amb);
+    s.readRegister(0x04, &sgm);
+    s.readRegister(0x00, &status);
+
+    if (sig < st.sigMin) st.sigMin = sig;
+    if (sig > st.sigMax) st.sigMax = sig;
+    st.sigSum += sig;
+    st.ambSum += amb;
+    st.sigmaSum += sgm;
+
+    uint16_t mm; bool ok;
+    if (s.mDeviceIndex == 3) {
+      mm = raw;
+      ok = (raw != TOF_INVALID_MM) && raw >= TOF_MIN_VALID_MM && raw <= TOF_MAX_VALID_MM;
+    } else {
+      mm = (uint16_t)raw * 10;
+      ok = (raw != TOF_INVALID_CM) && mm >= TOF_MIN_VALID_MM && mm <= TOF_MAX_VALID_MM;
+    }
+    if (ok && (status & 0x01)) {
+      st.valid++;
+      if (mm < st.dMin) st.dMin = mm;
+      if (mm > st.dMax) st.dMax = mm;
+      st.dSum += mm;
+      st.dSumSq += (uint32_t)mm * mm;
+    }
+  }
+}
+
+/** Print the shared CSV tail (everything after the tag/id prefix). No newline. */
+static void csvBody(uint8_t i, const SensorStats& st) {
+  uint16_t thr = tofThr[i];
+  uint32_t sigAvg = st.ans   ? st.sigSum   / st.ans   : 0;
+  uint32_t ambAvg = st.ans   ? st.ambSum   / st.ans   : 0;
+  uint32_t sgmAvg = st.ans   ? st.sigmaSum / st.ans   : 0;
+  uint32_t dAvg   = st.valid ? st.dSum     / st.valid : 0;
+  uint32_t ratio  = thr ? (st.sigMax * 100UL) / thr : 0;
+
+  // Integer standard deviation of the accepted distances (reliability metric).
+  uint32_t dStd = 0;
+  if (st.valid > 1) {
+    int32_t var = (int32_t)(st.dSumSq / st.valid) - (int32_t)(dAvg * dAvg);
+    if (var > 0) dStd = (uint32_t)sqrt((double)var);
+  }
+
+  Serial.print(st.samples);                Serial.print(',');
+  Serial.print(st.ans);                    Serial.print(',');
+  Serial.print(st.valid);                  Serial.print(',');
+  Serial.print(st.sigMin == 0xFFFF ? 0 : st.sigMin); Serial.print(',');
+  Serial.print(sigAvg);                    Serial.print(',');
+  Serial.print(st.sigMax);                 Serial.print(',');
+  Serial.print(thr);                       Serial.print(',');
+  Serial.print(ratio);                     Serial.print(',');
+  Serial.print(ambAvg);                    Serial.print(',');
+  Serial.print(sgmAvg);                    Serial.print(',');
+  Serial.print(st.valid ? st.dMin : 0);    Serial.print(',');
+  Serial.print(st.valid ? st.dMax : 0);    Serial.print(',');
+  Serial.print(dAvg);                      Serial.print(',');
+  Serial.print(dStd);                      Serial.print(',');
+  Serial.print(st.samples ? st.readUsSum / st.samples : 0); Serial.print(',');
+  Serial.print(st.readUsMax);
+}
+
+static void refreshThr(uint8_t i) {
+  uint16_t v = 0;
+  tofThr[i] = tofSensors[i].readRegister(0xB5, &v) ? v : 0;
+}
+
+/** 'g <id>' - compact config dump, one CSV line. */
+static void cmdConfigCsv(uint8_t id) {
+  static const uint8_t REGS[] = {
+    0x80,0x81,0x82,0xB0,0xB1,0xB2,0xB3,0xB4,0xB5,0xB6,0xB7,0xB8,0xBA,0xBB,0xBC,0xBD
+  };
+  DistanceSensor& s = tofSensors[id - 1];
+  Serial.println(F("g,id,80,81,82,B0,B1,B2,B3,B4,B5,B6,B7,B8,BA,BB,BC,BD"));
+  Serial.print(F("g,")); Serial.print(id);
+  for (uint8_t k = 0; k < sizeof(REGS); k++) {
+    uint16_t v = 0;
+    Serial.print(',');
+    if (s.readRegister(REGS[k], &v)) Serial.print(v); else Serial.print('?');
+  }
+  Serial.println();
+}
+
+/** 'x <id> [ms]' - compact stats for ONE sensor. */
+static void cmdCsvStats(uint8_t id, uint16_t ms) {
+  static bool hdr = false;
+  if (!hdr) {
+    Serial.println(F("X,id,samples,ans,valid,sigMin,sigAvg,sigMax,thr,ratio%,ambAvg,sigmaAvg,dMin,dMax,dAvg,dStd,readUsAvg,readUsMax"));
+    hdr = true;
+  }
+  refreshThr(id - 1);
+  SensorStats st;
+  sampleOne(id - 1, ms, st);
+  Serial.print(F("X,")); Serial.print(id); Serial.print(',');
+  csvBody(id - 1, st);
+  Serial.println();
+}
+
+/** 'K <id> <reg> <v...> [w<ms>] [keep]' - register sweep. */
+static void cmdSweep(uint8_t id, uint8_t reg, const uint16_t* vals, uint8_t n,
+                     bool keep, uint16_t ms) {
+  DistanceSensor& s = tofSensors[id - 1];
+  uint16_t orig = 0;
+  bool haveOrig = s.readRegister(reg, &orig);
+  Serial.println(F("K,id,reg,val,samples,ans,valid,sigMin,sigAvg,sigMax,thr,ratio%,ambAvg,sigmaAvg,dMin,dMax,dAvg,dStd,readUsAvg,readUsMax"));
+  for (uint8_t k = 0; k < n; k++) {
+    s.writeRegister(reg, vals[k]);
+    delay(200);                              // let the setting take effect + settle
+    refreshThr(id - 1);
+    SensorStats st;
+    sampleOne(id - 1, ms, st);
+    Serial.print(F("K,")); Serial.print(id); Serial.print(',');
+    hexN(reg, 2); Serial.print(','); Serial.print(vals[k]); Serial.print(',');
+    csvBody(id - 1, st);
+    Serial.println();
+  }
+  if (haveOrig && !keep) s.writeRegister(reg, orig);
+  refreshThr(id - 1);
+  Serial.print(F("K,restore,")); Serial.println(keep ? F("kept") : F("original"));
+}
+
+/** 'A <reg> <val> ...' - apply pairs to every sensor and save. */
+static void cmdApplyAll(const uint16_t* regs, const uint16_t* vals, uint8_t n) {
+  Serial.println(F("A,id,reg,val,write,save"));
+  for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++) {
+    DistanceSensor& s = tofSensors[i];
+    for (uint8_t k = 0; k < n; k++) {
+      bool w = s.writeRegister((uint8_t)regs[k], vals[k]);
+      Serial.print(F("A,")); Serial.print(s.mDeviceIndex); Serial.print(',');
+      hexN(regs[k], 2); Serial.print(','); Serial.print(vals[k]); Serial.print(',');
+      Serial.println(w ? F("ok") : F("FAIL"));
+    }
+    bool sv = s.saveConfiguration();
+    Serial.print(F("A,")); Serial.print(s.mDeviceIndex);
+    Serial.println(sv ? F(",save,ok") : F(",save,FAIL"));
+  }
+  readThresholds();
+}
+
+// ============================================================================
+//                    GUIDED TUNING PROCEDURE  ('p')
+// ============================================================================
+// A blocking, step-by-step walk-through of the black-vs-white procedure in
+// GUIDE.md: it prints what to place where, waits for a key, then runs the
+// matching measurement. Nothing is saved to the sensors until the last step,
+// so 'q' can abort at any point. Keys: g (or any key) = go, s = skip, q = quit.
+// 'g' is advertised because some serial monitors do not send CR/LF on Enter.
+//
+// It blocks the main loop (like 's' and 'b' already do), so the live view is
+// switched off and the motors are stopped on entry.
+
+static bool gQuit;                       // set by gAsk() when the operator quits
+
+static void gFlush() { while (Serial.available()) Serial.read(); }
+
+/** One key, or 0 on timeout. A trailing CR/LF is swallowed so one Enter = one key. */
+static char gKey(uint32_t to) {
+  uint32_t t0 = millis();
+  while (!Serial.available()) if (millis() - t0 > to) return 0;
+  char c = (char)Serial.read();
+  delay(2);
+  while (Serial.available() && (Serial.peek() == '\r' || Serial.peek() == '\n')) Serial.read();
+  return c;
+}
+
+/** Print a step prompt and wait. Returns true to run the step, false to skip;
+ *  sets gQuit on 'q' or timeout. */
+static bool gAsk(const __FlashStringHelper* title) {
+  sep();
+  Serial.print(F("== ")); Serial.println(title);
+  Serial.println(F("   [g]=go  s=skip  q=quit"));
+  char c = gKey(120000);
+  if (c == 0 || c == 'q' || c == 'Q') { gQuit = true; return false; }
+  return !(c == 's' || c == 'S');
+}
+
+/** Prompt for a number; empty input keeps the default. */
+static uint16_t gNum(const __FlashStringHelper* label, uint16_t def) {
+  Serial.print(F("   ")); Serial.print(label);
+  Serial.print(F(" [")); Serial.print(def); Serial.print(F("]: "));
+  char buf[12]; uint8_t n = 0; uint32_t t0 = millis();
+  for (;;) {
+    if (millis() - t0 > 120000) break;
+    if (!Serial.available()) continue;
+    char c = (char)Serial.read();
+    if (c == '\r' || c == '\n') break;   // CR, LF or CRLF all end the entry
+    if (n < sizeof(buf) - 1) buf[n++] = c;
+  }
+  buf[n] = '\0';
+  delay(2);
+  while (Serial.available() && (Serial.peek() == '\r' || Serial.peek() == '\n')) Serial.read();
+  return (n == 0) ? def : (uint16_t)strtol(buf, NULL, 10);
+}
+
+static void cmdGuide() {
+  motorCmd = 0; motorsStop(); liveOn = false; gFlush(); gQuit = false;
+
+  gAsk(F("TAXI ToF guided tuning. Need black+white plates + ruler. Sensor 3 (MID)."));
+  if (gQuit) return;
+
+  if (gAsk(F("Step 0: clear area (>1.5 m). Reads config + bus health.")))
+    { cmdConfigCsv(3); cmdBus(); }
+  if (gQuit) return;
+
+  static const uint16_t dists[] = {100, 200, 300, 400, 500};
+  for (uint8_t d = 0; d < 5; d++) {
+    sep();
+    Serial.print(F("== Step 1: black/white @ ")); Serial.print(dists[d]); Serial.println(F(" mm"));
+    Serial.println(F("   WHITE plate. [g]=go  s=skip  q=quit"));
+    char c = gKey(120000);
+    if (c == 0 || c == 'q' || c == 'Q') return;
+    if (c != 's' && c != 'S') cmdCsvStats(3, 1500);
+    Serial.println(F("   Now BLACK, same distance. [g]=go  s=skip  q=quit"));
+    c = gKey(120000);
+    if (c == 0 || c == 'q' || c == 'Q') return;
+    if (c != 's' && c != 'S') cmdCsvStats(3, 1500);
+    gFlush();
+  }
+
+  if (gAsk(F("Step 2: no targets (>1.5 m). sigMax = noise floor, valid must be 0.")))
+    cmdCsvStats(3, 1500);
+  if (gQuit) return;
+
+  if (gAsk(F("Step 3: BLACK@300. Sweep sampling B0 = 5..50 ms.")))
+    { static const uint16_t v[] = {5,8,10,12,15,20,25,33,40,50}; cmdSweep(3,0xB0,v,10,false,800); }
+  if (gQuit) return;
+
+  if (gAsk(F("Step 4: BLACK@300. Sweep signal thr B5 = 100..2000.")))
+    { static const uint16_t v[] = {100,200,300,400,600,800,1024,1500,2000}; cmdSweep(3,0xB5,v,9,false,800); }
+  if (gQuit) return;
+
+  if (gAsk(F("Step 5 (opt): BLACK@300. Sweep sigma thr B6 = 10..100.")))
+    { static const uint16_t v[] = {10,15,20,30,40,60,100}; cmdSweep(3,0xB6,v,7,false,800); }
+  if (gQuit) return;
+
+  if (gAsk(F("Step 6 (opt): sweep max range B8 = 500..800 mm.")))
+    { static const uint16_t v[] = {500,600,700,800}; cmdSweep(3,0xB8,v,4,false,800); }
+  if (gQuit) return;
+
+  if (gAsk(F("Step 7: re-apply winners (W 3 B0/B5/B6/B8), verify BLACK at each distance.")))
+    cmdCsvStats(3, 1500);
+  if (gQuit) return;
+
+  sep();
+  Serial.println(F("== Step 8: apply winners to all 5 + save."));
+  Serial.println(F("   Type values; Enter keeps current value."));
+  uint16_t c0 = 0, c5 = 0, c6 = 0, c8 = 0;
+  tofSensors[2].readRegister(0xB0, &c0);
+  tofSensors[2].readRegister(0xB5, &c5);
+  tofSensors[2].readRegister(0xB6, &c6);
+  tofSensors[2].readRegister(0xB8, &c8);
+  uint16_t b0 = gNum(F("B0 sampling ms"), c0);
+  uint16_t b5 = gNum(F("B5 signal thr"), c5);
+  uint16_t b6 = gNum(F("B6 sigma thr"), c6);
+  uint16_t b8 = gNum(F("B8 max dist mm"), c8);
+  Serial.print(F("   Apply B0=")); Serial.print(b0); Serial.print(F(" B5=")); Serial.print(b5);
+  Serial.print(F(" B6=")); Serial.print(b6); Serial.print(F(" B8=")); Serial.print(b8);
+  Serial.println(F(" ?  [g]=yes  q=no"));
+  {
+    char c = gKey(120000);
+    if (c != 0 && c != 'q' && c != 'Q') {
+      uint16_t regs[4] = {0xB0, 0xB5, 0xB6, 0xB8};
+      uint16_t vals[4] = {b0, b5, b6, b8};
+      cmdApplyAll(regs, vals, 4);
+    } else {
+      Serial.println(F("   (not applied)"));
+    }
+  }
+  sep();
+  Serial.println(F("== Done. Set TOF_TIMEOUT_MS > sampling in Config.h."));
   sep();
 }
 
@@ -649,34 +1004,15 @@ static void printHelp() {
   sep();
   Serial.println(F(" Bench_Test - TAXI mini sumo diagnostics"));
   sep();
-  Serial.println(F(" h            this menu"));
-  Serial.println(F(" l            toggle LIVE table"));
-  Serial.println(F(" n            toggle ToF SNR lines in the live table"));
-  Serial.println(F(" r <ms>       live refresh interval (>=50, default 250)"));
-  Serial.println(F(" s            2 s ToF sensitivity stats  <- the black/white test"));
-  Serial.println(F(" b            bus health: response count + latency per sensor"));
-  Serial.println(F(" 1..5         read-only registers 0x00-0x07 for that sensor id"));
-  Serial.println(F(" c            config registers 0x80-0xBD for ALL sensors"));
-  Serial.println(F(" i            info: pins, DIP, start pin, loop timing"));
-  Serial.println(F(" m <n>        motors, capped at 35%:  0 stop 1 Lfwd 2 Rfwd 3 both"));
-  Serial.println(F("                                     4 Lrev 5 Rrev 6 both"));
-  Serial.println(F("                                     7 spin-left 8 spin-right"));
-  Serial.println(F(" q <n>        ring: 0..6 single LED, 7 all white, 8 blank"));
-  Serial.println(F(" z            PANIC: stop motors, blank ring, live off"));
-  Serial.println(F(" --- sensor config writes (advanced, non-volatile with S) ---"));
-  Serial.println(F(" W <id> <regHex> <valDec>   e.g.  W 1 B0 33   (sampling 33 ms)"));
-  Serial.println(F(" S <id>       save that sensor's config    Z <id>  factory reset"));
-  Serial.println(F(" U <id>       restart that sensor"));
-  Serial.println(F("   regs: B0 sampling ms | B4 checks | B5 signal thr | B6 sigma thr"));
-  Serial.println(F("         B8 max dist mm | B1 offset | B2 crosstalk | B3 linear"));
-  Serial.println(F("   values are 0..FFF. Ids are 1..5 = SR FR MID FL SL."));
-  sep();
-  Serial.println(F(" Black-vs-white procedure:"));
-  Serial.println(F("   1. 'n' on, 'l' on. Park the target at a known distance."));
-  Serial.println(F("   2. Watch Signal vs Thr(0xB5) in the live table."));
-  Serial.println(F("   3. 's' with the black target, then 's' with a white one."));
-  Serial.println(F("   4. Compare Max/Thr%. <100% = register fix (B0 up, B5 down)."));
-  Serial.println(F("      ~0 signal at range = optical, not a register problem."));
+  Serial.println(F(" h menu   l live   n SNR   r <ms> rate   i info   z PANIC"));
+  Serial.println(F(" p GUIDED black/white tuning procedure (step by step)"));
+  Serial.println(F(" s 2s ToF stats   b bus health   1..5 regs 0x00-07   c config all"));
+  Serial.println(F(" m <n> motors 0-8 (35% cap)   q <n> ring 0-6 LED,7 all,8 blank"));
+  Serial.println(F(" W <id> <regHex> <val>  S <id> save  Z <id> reset  U <id> restart"));
+  Serial.println(F("   regs: B0 sampling ms | B4 checks | B5 sig thr | B6 sigma thr"));
+  Serial.println(F("         B8 max mm | B1 offset | B2 crosstalk | B3 linear (0..FFF)"));
+  Serial.println(F(" CSV: g <id> config | x <id> [ms] stats | K <id> <reg> <v..> sweep"));
+  Serial.println(F("      A <reg> <val> .. apply to all + save (cols in GUIDE.md)"));
   sep();
 }
 
@@ -687,6 +1023,8 @@ static void handleLine(char* s) {
 
   switch (verb[0]) {
     case 'h': case 'H': case '?': printHelp(); break;
+
+    case 'p': case 'P': cmdGuide(); break;
 
     case 'l': case 'L':
       liveOn = !liveOn;
@@ -778,6 +1116,63 @@ static void handleLine(char* s) {
       break;
     }
 
+    // --- compact CSV tuning helpers ----------------------------------------
+    case 'g': case 'G': {
+      uint8_t id = (uint8_t)argDec(&p, 3);
+      if (id < 1 || id > TOF_SENSOR_COUNT) { Serial.println(F("ERR: id 1..5")); break; }
+      cmdConfigCsv(id);
+      break;
+    }
+
+    case 'x': case 'X': {
+      uint8_t id = (uint8_t)argDec(&p, 3);
+      long ms = argDec(&p, 1500);
+      if (id < 1 || id > TOF_SENSOR_COUNT) { Serial.println(F("ERR: id 1..5")); break; }
+      if (ms < 200) ms = 200;
+      cmdCsvStats(id, (uint16_t)ms);
+      break;
+    }
+
+    case 'K': {
+      uint8_t id = (uint8_t)argDec(&p, 3);
+      long reg = argHex(&p, -1);
+      if (id < 1 || id > TOF_SENSOR_COUNT || reg < 0) {
+        Serial.println(F("ERR: K <id> <regHex> <v...> [w<ms>] [keep]")); break;
+      }
+      uint16_t vals[SWEEP_MAX_VALUES];
+      uint8_t n = 0;
+      bool keep = false;
+      uint16_t ms = SWEEP_DEFAULT_MS;
+      for (;;) {
+        char* t = tok(&p);
+        if (!t) break;
+        if (!strcmp(t, "keep")) { keep = true; continue; }
+        if (t[0] == 'w' && t[1]) { ms = (uint16_t)strtol(t + 1, NULL, 10); continue; }
+        if (n < SWEEP_MAX_VALUES) vals[n++] = (uint16_t)strtol(t, NULL, 10);
+      }
+      if (n == 0) { Serial.println(F("ERR: K needs at least one value")); break; }
+      if (ms < 100) ms = 100;
+      cmdSweep(id, (uint8_t)reg, vals, n, keep, ms);
+      break;
+    }
+
+    case 'A': {
+      uint16_t regs[8], vals[8];
+      uint8_t n = 0;
+      for (;;) {
+        char* rt = tok(&p);
+        if (!rt) break;
+        char* vt = tok(&p);
+        if (!vt || n >= 8) break;
+        regs[n] = (uint16_t)strtol(rt, NULL, 16);
+        vals[n] = (uint16_t)strtol(vt, NULL, 10);
+        n++;
+      }
+      if (n == 0) { Serial.println(F("ERR: A <regHex> <valDec> [<regHex> <valDec> ...]")); break; }
+      cmdApplyAll(regs, vals, n);
+      break;
+    }
+
     default:
       Serial.println(F("ERR: unknown command, 'h' for the menu"));
       break;
@@ -820,7 +1215,7 @@ void setup() {
   Serial.println();
   Serial.println(F("=== TAXI Bench_Test ==="));
   Serial.print(F("Serial ")); Serial.print(MONITOR_BAUD);
-  Serial.println(F("  -  'h' for the menu, 'l' for the live table"));
+  Serial.println(F("  -  'h' menu, 'l' live, 'p' guided tuning"));
   printHelp();
 }
 

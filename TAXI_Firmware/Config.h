@@ -104,13 +104,15 @@
 
 #define TOF_SENSOR_COUNT   5        // sensors on the shared bus
 #define TOF_BUS_BAUD       115200   // must match sensor register 0xB0
-// Per-read timeout for the M60F bus. The read returns the last stored value
-// almost instantly (~0.75 ms measured), but under ACTIVE ranging the sensor
-// MCU can be busy measuring for its full sampling/timing budget (reg 0xB0,
-// currently 12 ms on this robot), delaying a read that lands mid-measurement.
-// This must stay above that budget + margin or a late reply leaks into the
-// next sensor's read (the old "shifted by one" bug). 15 = 12 ms budget + margin.
-#define TOF_TIMEOUT_MS     15
+// Per-read timeout for the M60F bus. This is a MAXIMUM, not a fixed wait: the
+// read returns the instant the sensor's reply terminator arrives (readBytesUntil
+// stops on '\n'), so a healthy sensor costs ~0.75 ms regardless of this value.
+// It only bounds the failure case. Under ACTIVE ranging the sensor MCU can be
+// busy measuring for its full sampling/timing budget (reg 0xB0, now 45 ms on
+// this robot), delaying a read that lands mid-measurement. This must stay above
+// that budget + margin or a late reply leaks into the next sensor's read (the
+// old "shifted by one" bug). 55 = 45 ms budget + margin.
+#define TOF_TIMEOUT_MS     55
 #define MONITOR_BAUD       115200   // USB Serial debug baud. NOMINAL ONLY: on the
                                     // ATmega32U4 Serial is USB CDC, not a UART, so
                                     // this does not change the transfer rate (the

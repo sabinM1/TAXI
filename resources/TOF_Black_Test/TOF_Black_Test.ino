@@ -1,0 +1,609 @@
+/*
+ * TOF_Black_Test — M60F black-target tuning test (sensor id 3, MID).
+ *
+ * Two things this sketch does that Bench_Test did not:
+ *   1. VERIFIES every write by reading the register back.
+ *   2. Saves + restarts after each config, because the sensor LATCHES its
+ *      configuration at boot (a live write changes the readback but not the
+ *      behaviour). This was the bug behind every "the setting does nothing".
+ *
+ * It also prints the FULL ranging-status byte (which check failed), not just
+ * bit 0.
+ *
+ * Hardware: sensor id 3 on D4, 4.7k pull-up to 5V, Serial Monitor 115200.
+ * Target:   matte BLACK plate, perpendicular, filling the cone.
+ *
+ * Commands:
+ *   h              help
+ *   c              read + print the full config
+ *   s [ms]         sample (default 1500 ms): stats + status histogram
+ *   w <reg> <v>    write reg (decimal or 0x.. hex), read back, report
+ *   r              restart sensor (reloads registers from saved config)
+ *   S              save current config to sensor memory
+ *   t              quick sweep of B0 and B5 (no restart)
+ *   T              saved sweep of B0 and B5 (write + save + restart)
+ *   g <dist>       GRID: every B0 x B5 x B6 combo at <dist> mm, averaged
+ *   v <dist>       VERIFY: current config at <dist> mm, averaged
+ *   n              EMPTY-SPACE noise sweep: B4 x B5, 10 reps each
+ *   A              apply TofConfig.h values to ALL 5 sensors (verify + save)
+ *
+ * Grid output is CSV, one row per combo:
+ *   G,dist,b0,b5,b6,reps,samples,ans,valid,validPct,sigMin,sigAvg,sigMax,
+ *   sigmaAvg,ambAvg,dAvg,dMin,dMax,dStd,status
+ */
+
+#include <Arduino.h>
+#include <string.h>
+#include <math.h>
+#include <SingleWireSerial.h>
+#include "DistanceSensor.h"
+#include "TofConfig.h"
+
+// ---- hardware (matches Config.h) -------------------------------------------
+#define PIN_TOF_BUS    4
+#define TOF_BUS_BAUD   115200
+#define TOF_TIMEOUT_MS 15
+#define SENSOR_ID      3
+
+SingleWireSerial bus(false);
+DistanceSensor sensor(&bus, SENSOR_ID);
+
+// All five sensors, used by the 'A' apply-to-all command.
+DistanceSensor allSensors[5] = {
+  DistanceSensor(&bus, 1), DistanceSensor(&bus, 2),
+  DistanceSensor(&bus, 3), DistanceSensor(&bus, 4),
+  DistanceSensor(&bus, 5)
+};
+
+// ---- grid definition -------------------------------------------------------
+static const uint16_t GRID_B0[] = {25, 33, 40, 50};
+static const uint16_t GRID_B5[] = {0, 20, 40, 60};
+static const uint16_t GRID_B6[] = {100, 300};
+#define GRID_REPS       3
+#define GRID_SAMPLE_MS  500
+
+// ---- structs (declared early: Arduino inserts prototypes above) ------------
+struct Stats {
+  uint16_t samples, ans, valid, dN;
+  uint16_t sigMin, sigMax; uint32_t sigSum;
+  uint32_t ambSum, sigmaSum, spadSum;
+  uint16_t dMin, dMax; uint32_t dSum, dSumSq;
+  uint16_t statusHist[8];
+};
+
+struct Acc {
+  uint32_t reps;
+  uint32_t samples, ans, valid, dN;
+  uint32_t sigMin, sigMax, sigSum;
+  uint32_t ambSum, sigmaSum, spadSum;
+  uint32_t dMin, dMax, dSum, dSumSq;
+  uint32_t statusHist[8];
+};
+
+// ---- helpers ---------------------------------------------------------------
+static void hex2(uint8_t v) {
+  static const char* D = "0123456789ABCDEF";
+  Serial.print(D[(v >> 4) & 0xF]);
+  Serial.print(D[v & 0xF]);
+}
+
+static uint16_t rd(uint8_t reg) {
+  uint16_t v = 0;
+  sensor.readRegister(reg, &v);
+  return v;
+}
+
+static const char* regName(uint8_t r) {
+  switch (r) {
+    case 0x80: return "IO mode";
+    case 0x81: return "serial id";
+    case 0x82: return "baud";
+    case 0xB0: return "sampling ms";
+    case 0xB1: return "offset";
+    case 0xB2: return "crosstalk";
+    case 0xB3: return "linear";
+    case 0xB4: return "checks";
+    case 0xB5: return "signal thr";
+    case 0xB6: return "sigma thr";
+    case 0xB7: return "min mm";
+    case 0xB8: return "max mm";
+    case 0xBA: return "det mode";
+    case 0xBB: return "det invert";
+    case 0xBC: return "det lo mm";
+    case 0xBD: return "det hi mm";
+    default:   return "?";
+  }
+}
+
+static const char* statusName(uint8_t b) {
+  switch (b) {
+    case 0: return "valid";
+    case 1: return "wrap";
+    case 2: return "phase";
+    case 3: return "sigMIN";
+    case 4: return "sigTHR";
+    case 5: return "sigma";
+    case 6: return "distMIN";
+    case 7: return "distMAX";
+    default: return "?";
+  }
+}
+
+// ---- sampling --------------------------------------------------------------
+static void sample(uint16_t windowMs, Stats& st) {
+  memset(&st, 0, sizeof(st));
+  st.sigMin = 0xFFFF;
+  st.dMin   = 0xFFFF;
+
+  uint32_t t0 = millis();
+  while (millis() - t0 < windowMs) {
+    uint16_t raw = 0, sig = 0, amb = 0, sgm = 0, spad = 0, status = 0;
+    st.samples++;
+    if (!sensor.readRegister(0x01, &raw)) continue;
+    st.ans++;
+    sensor.readRegister(0x02, &sig);
+    sensor.readRegister(0x03, &amb);
+    sensor.readRegister(0x04, &sgm);
+    sensor.readRegister(0x05, &spad);
+    sensor.readRegister(0x00, &status);
+
+    if (sig < st.sigMin) st.sigMin = sig;
+    if (sig > st.sigMax) st.sigMax = sig;
+    st.sigSum += sig; st.ambSum += amb; st.sigmaSum += sgm; st.spadSum += spad;
+
+    for (uint8_t b = 0; b < 8; b++)
+      if (status & (1 << b)) st.statusHist[b]++;
+
+    if (status & 0x01) {
+      st.valid++;
+      if (raw != 0xFFF) {
+        st.dN++;
+        if (raw < st.dMin) st.dMin = raw;
+        if (raw > st.dMax) st.dMax = raw;
+        st.dSum += raw;
+        st.dSumSq += (uint32_t)raw * raw;
+      }
+    }
+  }
+}
+
+static void printStats(const Stats& st) {
+  uint32_t sigAvg  = st.ans   ? st.sigSum   / st.ans   : 0;
+  uint32_t sgmAvg  = st.ans   ? st.sigmaSum / st.ans   : 0;
+  uint32_t spadAvg = st.ans   ? st.spadSum  / st.ans   : 0;
+  uint32_t ambAvg  = st.ans   ? st.ambSum   / st.ans   : 0;
+  uint32_t dAvg    = st.dN    ? st.dSum     / st.dN    : 0;
+
+  Serial.print(F("   n="));    Serial.print(st.samples);
+  Serial.print(F(" ans="));    Serial.print(st.ans);
+  Serial.print(F(" valid="));  Serial.print(st.valid);
+  Serial.print(F(" sig="));    Serial.print(st.sigMin == 0xFFFF ? 0 : st.sigMin);
+  Serial.print('/');           Serial.print(sigAvg);
+  Serial.print('/');           Serial.print(st.sigMax);
+  Serial.print(F(" spad="));   Serial.print(spadAvg);
+  Serial.print(F(" amb="));    Serial.print(ambAvg);
+  Serial.print(F(" sigma="));  Serial.print(sgmAvg);
+  Serial.print(F(" d="));      Serial.print(dAvg);
+  Serial.print(F(" ["));       Serial.print(st.dN ? st.dMin : 0);
+  Serial.print('-');           Serial.print(st.dN ? st.dMax : 0);
+  Serial.println(']');
+
+  Serial.print(F("   status:"));
+  bool any = false;
+  for (uint8_t b = 0; b < 8; b++) {
+    if (st.statusHist[b]) {
+      Serial.print(' '); Serial.print(statusName(b));
+      Serial.print('='); Serial.print(st.statusHist[b]);
+      any = true;
+    }
+  }
+  if (!any) Serial.print(F(" (none)"));
+  Serial.println();
+}
+
+// ---- accumulate + print averaged -------------------------------------------
+static void accReset(Acc& a) {
+  memset(&a, 0, sizeof(a));
+  a.sigMin = 0xFFFF;
+  a.dMin   = 0xFFFF;
+}
+
+static void accAdd(Acc& a, const Stats& st) {
+  a.reps++;
+  a.samples += st.samples;
+  a.ans     += st.ans;
+  a.valid   += st.valid;
+  a.dN      += st.dN;
+  if (st.sigMin < a.sigMin) a.sigMin = st.sigMin;
+  if (st.sigMax > a.sigMax) a.sigMax = st.sigMax;
+  a.sigSum   += st.sigSum;
+  a.ambSum   += st.ambSum;
+  a.sigmaSum += st.sigmaSum;
+  a.spadSum  += st.spadSum;
+  a.dSum     += st.dSum;
+  a.dSumSq   += st.dSumSq;
+  if (st.dN) {
+    if (st.dMin < a.dMin) a.dMin = st.dMin;
+    if (st.dMax > a.dMax) a.dMax = st.dMax;
+  }
+  for (uint8_t b = 0; b < 8; b++) a.statusHist[b] += st.statusHist[b];
+}
+
+// Shared CSV body (everything after the tag + config columns).
+static void accBody(const Acc& a) {
+  uint32_t sigAvg = a.ans ? a.sigSum / a.ans : 0;
+  uint32_t sgmAvg = a.ans ? a.sigmaSum / a.ans : 0;
+  uint32_t ambAvg = a.ans ? a.ambSum / a.ans : 0;
+  uint32_t dAvg   = a.dN ? a.dSum / a.dN : 0;
+  uint32_t dStd   = 0;
+  if (a.dN > 1) {
+    int32_t var = (int32_t)(a.dSumSq / a.dN) - (int32_t)(dAvg * dAvg);
+    if (var > 0) dStd = (uint32_t)sqrt((double)var);
+  }
+  uint32_t validPct = a.samples ? (a.valid * 100UL) / a.samples : 0;
+
+  Serial.print(a.reps);
+  Serial.print(','); Serial.print(a.samples);
+  Serial.print(','); Serial.print(a.ans);
+  Serial.print(','); Serial.print(a.valid);
+  Serial.print(','); Serial.print(validPct);
+  Serial.print(','); Serial.print(a.sigMin == 0xFFFF ? 0 : a.sigMin);
+  Serial.print(','); Serial.print(sigAvg);
+  Serial.print(','); Serial.print(a.sigMax);
+  Serial.print(','); Serial.print(sgmAvg);
+  Serial.print(','); Serial.print(ambAvg);
+  Serial.print(','); Serial.print(dAvg);
+  Serial.print(','); Serial.print(a.dN ? a.dMin : 0);
+  Serial.print(','); Serial.print(a.dN ? a.dMax : 0);
+  Serial.print(','); Serial.print(dStd);
+  Serial.print(',');
+  bool any = false;
+  for (uint8_t b = 0; b < 8; b++) {
+    if (a.statusHist[b]) { if (any) Serial.print('+'); Serial.print(statusName(b)); any = true; }
+  }
+  if (!any) Serial.print('-');
+  Serial.println();
+}
+
+static void accPrint(const Acc& a, uint16_t dist, uint16_t b0, uint16_t b5, uint16_t b6) {
+  Serial.print(F("G,")); Serial.print(dist);
+  Serial.print(','); Serial.print(b0);
+  Serial.print(','); Serial.print(b5);
+  Serial.print(','); Serial.print(b6);
+  Serial.print(',');
+  accBody(a);
+}
+
+// ---- config set (write + save + restart) -----------------------------------
+static void setConfig(uint16_t b0, uint16_t b5, uint16_t b6) {
+  sensor.writeRegister(0xB0, b0);
+  sensor.writeRegister(0xB5, b5);
+  sensor.writeRegister(0xB6, b6);
+  sensor.saveConfiguration();
+  sensor.restartSensor();
+  delay(400);                       // restart ~50 ms + boot 10-50 ms
+}
+
+// ---- grid + verify ---------------------------------------------------------
+static void runGrid(uint16_t dist) {
+  Serial.println();
+  Serial.print(F("=== GRID @ ")); Serial.print(dist); Serial.println(F(" mm black ==="));
+  Serial.print(F("B0 x B5 x B6 = "));
+  Serial.print(sizeof(GRID_B0)/2); Serial.print('x');
+  Serial.print(sizeof(GRID_B5)/2); Serial.print('x');
+  Serial.print(sizeof(GRID_B6)/2);
+  Serial.print(F(" combos, ")); Serial.print(GRID_REPS);
+  Serial.print(F(" reps x ")); Serial.print(GRID_SAMPLE_MS); Serial.println(F(" ms"));
+  Serial.println(F("G,dist,b0,b5,b6,reps,samples,ans,valid,validPct,sigMin,sigAvg,sigMax,sigmaAvg,ambAvg,dAvg,dMin,dMax,dStd,status"));
+
+  for (uint8_t i = 0; i < sizeof(GRID_B0)/2; i++)
+  for (uint8_t j = 0; j < sizeof(GRID_B5)/2; j++)
+  for (uint8_t k = 0; k < sizeof(GRID_B6)/2; k++) {
+    uint16_t b0 = GRID_B0[i], b5 = GRID_B5[j], b6 = GRID_B6[k];
+    setConfig(b0, b5, b6);
+    Acc acc; accReset(acc);
+    for (uint8_t r = 0; r < GRID_REPS; r++) {
+      Stats st; sample(GRID_SAMPLE_MS, st); accAdd(acc, st);
+    }
+    accPrint(acc, dist, b0, b5, b6);
+  }
+  Serial.println(F("=== grid done ==="));
+}
+
+static void runVerify(uint16_t dist) {
+  Serial.println();
+  Serial.print(F("=== VERIFY current config @ ")); Serial.print(dist); Serial.println(F(" mm black ==="));
+  Serial.println(F("G,dist,b0,b5,b6,reps,samples,ans,valid,validPct,sigMin,sigAvg,sigMax,sigmaAvg,ambAvg,dAvg,dMin,dMax,dStd,status"));
+  uint16_t b0 = rd(0xB0), b5 = rd(0xB5), b6 = rd(0xB6);
+  Acc acc; accReset(acc);
+  for (uint8_t r = 0; r < GRID_REPS; r++) {
+    Stats st; sample(GRID_SAMPLE_MS, st); accAdd(acc, st);
+  }
+  accPrint(acc, dist, b0, b5, b6);
+  Serial.println(F("=== verify done ==="));
+}
+
+// ---- empty-space noise-floor sweep -----------------------------------------
+// Sweeps B4 (checks) x B5 (signal threshold) at the CURRENT B0/B6, averaging
+// NOISE_REPS samples per config. Point the sensor at >1.5 m of EMPTY SPACE
+// first (no target). A config is safe only if valid == 0 across every rep.
+static const uint16_t NOISE_B4[] = { 248, 254 };
+static const uint16_t NOISE_B5[] = { 0, 20, 25, 30, 35, 40, 45, 50, 60 };
+#define NOISE_REPS      10
+#define NOISE_SAMPLE_MS 400
+
+static void runNoise() {
+  uint16_t b0 = rd(0xB0), b6 = rd(0xB6);
+  Serial.println();
+  Serial.println(F("=== EMPTY-SPACE NOISE FLOOR ==="));
+  Serial.println(F("Point the sensor at >1.5 m of empty space (no target)."));
+  Serial.print(F("B4 x B5 = "));
+  Serial.print(sizeof(NOISE_B4)/2); Serial.print('x');
+  Serial.print(sizeof(NOISE_B5)/2);
+  Serial.print(F(" combos, ")); Serial.print(NOISE_REPS);
+  Serial.print(F(" reps x ")); Serial.print(NOISE_SAMPLE_MS);
+  Serial.print(F(" ms, B0=")); Serial.print(b0);
+  Serial.print(F(" B6=")); Serial.println(b6);
+  Serial.println(F("N,b4,b5,reps,samples,ans,valid,validPct,sigMin,sigAvg,sigMax,sigmaAvg,ambAvg,dAvg,dMin,dMax,dStd,status"));
+
+  for (uint8_t i = 0; i < sizeof(NOISE_B4)/2; i++)
+  for (uint8_t j = 0; j < sizeof(NOISE_B5)/2; j++) {
+    uint16_t b4 = NOISE_B4[i], b5 = NOISE_B5[j];
+    sensor.writeRegister(0xB4, b4);
+    sensor.writeRegister(0xB5, b5);
+    sensor.saveConfiguration();
+    sensor.restartSensor();
+    delay(400);
+    Acc acc; accReset(acc);
+    for (uint8_t r = 0; r < NOISE_REPS; r++) {
+      Stats st; sample(NOISE_SAMPLE_MS, st); accAdd(acc, st);
+    }
+    Serial.print(F("N,")); Serial.print(b4);
+    Serial.print(','); Serial.print(b5);
+    Serial.print(',');
+    accBody(acc);
+  }
+  Serial.println(F("=== noise sweep done ==="));
+}
+
+// ---- apply the winning config to all five sensors --------------------------
+// Values come from TofConfig.h. Writes each register, reads it back, saves and
+// restarts, ONE SENSOR AT A TIME, with delays so the shared bus settles between
+// steps. Prints a per-register ok/BAD and a per-sensor verdict.
+static void applyToAll() {
+  static const uint8_t  REGS[4] = { 0xB0, 0xB4, 0xB5, 0xB6 };
+  static const uint16_t VALS[4] = { TOF_CFG_B0, TOF_CFG_B4, TOF_CFG_B5, TOF_CFG_B6 };
+
+  Serial.println();
+  Serial.println(F("=== APPLY WINNING CONFIG TO ALL 5 SENSORS ==="));
+  Serial.print(F("B0=")); Serial.print(TOF_CFG_B0);
+  Serial.print(F(" B4=")); Serial.print(TOF_CFG_B4);
+  Serial.print(F(" B5=")); Serial.print(TOF_CFG_B5);
+  Serial.print(F(" B6=")); Serial.println(TOF_CFG_B6);
+
+  bool allOk = true;
+  for (uint8_t id = 1; id <= 5; id++) {
+    DistanceSensor& s = allSensors[id - 1];
+    Serial.print(F("id ")); Serial.print(id); Serial.print(F(": "));
+    bool ok = true;
+    for (uint8_t k = 0; k < 4; k++) {
+      bool w = s.writeRegister(REGS[k], VALS[k]);
+      delay(20);
+      uint16_t rb = 0;
+      bool r = s.readRegister(REGS[k], &rb);
+      bool good = w && r && rb == VALS[k];
+      ok = ok && good;
+      hex2(REGS[k]);
+      Serial.print('='); Serial.print(rb);
+      Serial.print(good ? F(" ok ") : F(" BAD "));
+      delay(20);
+    }
+    bool saved = s.saveConfiguration();
+    delay(50);
+    s.restartSensor();
+    delay(400);
+    Serial.println(ok && saved ? F("-> saved+restarted") : F("-> FAILED"));
+    allOk = allOk && ok && saved;
+    delay(100);
+  }
+  Serial.println(allOk ? F("=== apply done: all 5 OK ===")
+                       : F("=== apply done: SOME FAILED ==="));
+}
+
+// ---- config dump -----------------------------------------------------------
+static void printConfig() {
+  static const uint8_t regs[] = {
+    0x80,0x81,0x82,0xB0,0xB1,0xB2,0xB3,0xB4,0xB5,0xB6,0xB7,0xB8,0xBA,0xBB,0xBC,0xBD
+  };
+  Serial.println(F("reg  name          val"));
+  for (uint8_t i = 0; i < sizeof(regs); i++) {
+    uint16_t v = 0;
+    bool ok = sensor.readRegister(regs[i], &v);
+    Serial.print(F("  ")); hex2(regs[i]); Serial.print(F("  "));
+    const char* n = regName(regs[i]);
+    Serial.print(n);
+    for (uint8_t p = strlen(n); p < 14; p++) Serial.print(' ');
+    if (ok) Serial.println(v); else Serial.println(F("?"));
+  }
+}
+
+// ---- write with verification -----------------------------------------------
+static bool writeVerified(uint8_t reg, uint16_t val) {
+  bool w = sensor.writeRegister(reg, val);
+  uint16_t rb = rd(reg);
+  Serial.print(F("  w ")); hex2(reg);
+  Serial.print(F(" <- ")); Serial.print(val);
+  Serial.print(w ? F("  ack=ok") : F("  ack=FAIL"));
+  Serial.print(F("  readback=")); Serial.print(rb);
+  Serial.println(rb == val ? F("  OK") : F("  MISMATCH"));
+  return w && rb == val;
+}
+
+// ---- quick sweeps ----------------------------------------------------------
+static void sweepReg(uint8_t reg, const uint16_t* vals, uint8_t n, bool saved) {
+  uint16_t orig = rd(reg);
+  Serial.println();
+  Serial.print(saved ? F("-- SAVED sweep ") : F("-- sweep ")); hex2(reg);
+  Serial.print(F(" (")); Serial.print(regName(reg));
+  Serial.print(F("), orig=")); Serial.print(orig); Serial.println(F(" --"));
+  for (uint8_t k = 0; k < n; k++) {
+    if (saved) {
+      sensor.writeRegister(reg, vals[k]);
+      sensor.saveConfiguration();
+      sensor.restartSensor();
+      delay(400);
+      uint16_t rb = rd(reg);
+      Serial.print(F("  ")); hex2(reg); Serial.print(F(" <- ")); Serial.print(vals[k]);
+      Serial.print(F("  readback=")); Serial.print(rb);
+      Serial.println(rb == vals[k] ? F("  OK") : F("  MISMATCH"));
+    } else {
+      writeVerified(reg, vals[k]);
+    }
+    Stats st; sample(1200, st); printStats(st);
+  }
+  if (saved) {
+    sensor.writeRegister(reg, orig);
+    sensor.saveConfiguration();
+    sensor.restartSensor();
+    delay(400);
+  } else {
+    sensor.writeRegister(reg, orig);
+  }
+  Serial.print(F("  (restored ")); Serial.print(orig); Serial.println(')');
+}
+
+static void runSweep(bool saved) {
+  Serial.println();
+  Serial.println(saved ? F("=== SAVED SWEEP (write + save + restart) ===")
+                       : F("=== QUICK SWEEP (no restart) ==="));
+  static const uint16_t b0[] = {5, 10, 15, 20, 25, 33, 40, 50};
+  static const uint16_t b5[] = {0, 10, 20, 30, 40, 60, 100, 200, 512};
+  sweepReg(0xB0, b0, 8, saved);
+  sweepReg(0xB5, b5, 9, saved);
+  Serial.println(F("=== done ==="));
+}
+
+// ---- command line ----------------------------------------------------------
+static char lineBuf[40];
+static uint8_t lineLen = 0;
+
+static void printHelp() {
+  Serial.println(F("--- TOF_Black_Test (sensor 3, MID) ---"));
+  Serial.println(F(" h            help"));
+  Serial.println(F(" c            read + print full config"));
+  Serial.println(F(" s [ms]       sample (default 1500): stats + status histogram"));
+  Serial.println(F(" w <reg> <v>  write reg (dec or 0x..), read back, report"));
+  Serial.println(F(" r            restart (reloads registers from SAVED config)"));
+  Serial.println(F(" S            save current config to sensor memory"));
+  Serial.println(F(" t            quick sweep B0/B5 (no restart)"));
+  Serial.println(F(" T            saved sweep B0/B5 (write+save+restart)"));
+  Serial.println(F(" g <dist>     GRID: all B0 x B5 x B6 combos at <dist> mm, averaged"));
+  Serial.println(F(" v <dist>     VERIFY current config at <dist> mm, averaged"));
+  Serial.println(F(" n            EMPTY-SPACE noise sweep: B4 x B5, 10 reps each"));
+  Serial.println(F(" A            APPLY TofConfig.h values to ALL 5 sensors (verify+save)"));
+  Serial.println(F("--------------------------------------"));
+}
+
+static long parseVal(const char* s) {
+  if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) return strtol(s + 2, NULL, 16);
+  return strtol(s, NULL, 10);
+}
+
+static void handleLine(char* s) {
+  while (*s == ' ') s++;
+  char verb = *s;
+  if (!verb) return;
+  while (*s && *s != ' ') s++;
+  while (*s == ' ') s++;
+
+  switch (verb) {
+    case 'h': case 'H': case '?': printHelp(); break;
+
+    case 'c': case 'C': printConfig(); break;
+
+    case 's': case 'S': {
+      if (verb == 'S') {
+        Serial.println(sensor.saveConfiguration() ? F("[save] ok") : F("[save] FAILED"));
+        break;
+      }
+      uint16_t ms = *s ? (uint16_t)strtol(s, NULL, 10) : 1500;
+      if (ms < 200) ms = 200;
+      Stats st;
+      sample(ms, st);
+      printStats(st);
+      break;
+    }
+
+    case 'w': case 'W': {
+      char* regTok = s;
+      while (*s && *s != ' ') s++;
+      if (*s) *s++ = '\0';
+      while (*s == ' ') s++;
+      if (!*regTok || !*s) { Serial.println(F("ERR: w <reg> <val>")); break; }
+      uint8_t reg = (uint8_t)strtol(regTok, NULL, 16);   // registers are hex
+      uint16_t val = (uint16_t)parseVal(s);              // value: dec or 0x.. hex
+      writeVerified(reg, val);
+      break;
+    }
+
+    case 'r': case 'R':
+      Serial.println(sensor.restartSensor() ? F("[restart] ok (registers reloaded from saved config)")
+                                            : F("[restart] FAILED"));
+      delay(120);
+      break;
+
+    case 't': runSweep(false); break;
+    case 'T': runSweep(true); break;
+
+    case 'g': case 'G': {
+      uint16_t dist = *s ? (uint16_t)strtol(s, NULL, 10) : 250;
+      runGrid(dist);
+      break;
+    }
+
+    case 'v': case 'V': {
+      uint16_t dist = *s ? (uint16_t)strtol(s, NULL, 10) : 250;
+      runVerify(dist);
+      break;
+    }
+
+    case 'n': case 'N': runNoise(); break;
+
+    case 'a': case 'A': applyToAll(); break;
+
+    default:
+      Serial.println(F("ERR: unknown, 'h' for help"));
+      break;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  uint32_t t0 = millis();
+  while (!Serial && millis() - t0 < 3000) {}
+
+  pinMode(PIN_TOF_BUS, INPUT);
+  bus.begin(TOF_BUS_BAUD);
+  bus.setTimeout(TOF_TIMEOUT_MS);
+
+  Serial.println();
+  Serial.println(F("=== TOF_Black_Test ==="));
+  Serial.println(F("Sensor 3 (MID) on D4. Put a matte BLACK plate in front,"));
+  Serial.println(F("perpendicular, filling the cone."));
+  Serial.println(F("Grid: 'g <dist>'   Verify: 'v <dist>'   Help: 'h'"));
+  printHelp();
+}
+
+void loop() {
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (lineLen) { lineBuf[lineLen] = '\0'; handleLine(lineBuf); lineLen = 0; }
+    } else if (lineLen < sizeof(lineBuf) - 1) {
+      lineBuf[lineLen++] = c;
+    } else {
+      lineLen = 0;
+      Serial.println(F("ERR: line too long"));
+    }
+  }
+}

@@ -106,7 +106,7 @@ void sensorsInit() {
   pinMode(PIN_TOF_BUS, INPUT);          // release SIG; pull-up holds idle high
   tofBus.begin(TOF_BUS_BAUD);
   tofBus.setTimeout(TOF_TIMEOUT_MS);    // must exceed the sensors' sampling budget
-                                        // (reg 0xB0 = 12 ms on this robot, see Config.h)
+                                        // (reg 0xB0 = 45 ms on this robot, see Config.h)
   lineSensL.begin();
   lineSensR.begin();
   lineSensB.begin();
