@@ -132,15 +132,89 @@ static void ringStatusUpdate() {
 }
 
 // ============================= DEBUG TELEMETRY =============================
-// Prints a labelled table every DEBUG_DUMP_MS (Config.h) when DEBUG_VERBOSE is on.
+// Prints the live status every DEBUG_DUMP_MS (Config.h) when DEBUG_VERBOSE is on.
 // ToF values are the normalised millimetre distances in tofMm[]; "---"
-// marks a sensor with no valid reading this pass.
+// marks a sensor with no valid reading this pass. Two formats, see
+// DEBUG_LIVE_LINE in Config.h: a single in-place line, or the multi-line table.
 
 // Loop timing telemetry (µs), measured in loop() and shown in the table.
 uint32_t gSensorUs = 0;   // sensorsUpdate() duration (ToF read + line pass)
 uint32_t gLoopUs   = 0;   // core loop: sensors + state machine + ring update
 
 #if DEBUG_VERBOSE
+
+#if DEBUG_LIVE_LINE
+
+// Format a distance into a fixed 3-char field: the number, or "---" when there
+// is no valid reading. Distances are 0..800, so three chars always fit.
+static void fmt3(uint16_t v, bool ok, char* out) {
+  if (!ok) { out[0] = '-'; out[1] = '-'; out[2] = '-'; out[3] = '\0'; return; }
+  out[0] = (v >= 100) ? (char)('0' + v / 100) : ' ';
+  out[1] = (v >= 10)  ? (char)('0' + (v / 10) % 10) : ' ';
+  out[2] = (char)('0' + v % 10);
+  out[3] = '\0';
+}
+
+// Column header, printed above the live row so the fields are labelled. Full
+// words for every field except the five ToF sensors (SL/FL/MID/FR/SR). Widths
+// match the value format below. It is reprinted on EVERY dump, so the row is
+// always labelled no matter where you look. A plain RAM string (not
+// F()/PROGMEM) so it prints reliably.
+static const char DEBUG_HEADER[] =
+  "time    state   strategy start bearing contact closest health  SL  FL MID  FR  SR edge motor    rawL rawB rawR ";
+
+// One fixed-width status row, redrawn in place with a carriage return. No
+// newline is emitted, so the row stays put instead of scrolling the terminal
+// (the multi-line table below scrolls ~14 lines every DEBUG_DUMP_MS, which is
+// what made the output flicker). Needs no ANSI support, so it works in any
+// monitor. Keep DEBUG_LINE_WIDTH <= the terminal width or the row wraps.
+static void debugDump() {
+  static uint32_t last = 0;
+  if (millis() - last < DEBUG_DUMP_MS) return;
+  last = millis();
+
+  int st = stateMachineState();
+
+  // Reprint the header above every row, so each value is always labelled.
+  // '\r' returns to the start of the row and the header is padded to
+  // DEBUG_LINE_WIDTH, so it overwrites the previous row with no blank line.
+  Serial.print('\r');
+  Serial.print(DEBUG_HEADER);
+
+  int l, r; motorsGetLast(&l, &r);
+  bool ok; uint16_t mm = sensorsClosestMm(&ok);
+
+  // ToF distances (mm), left -> right across the robot.
+  // Array index order is 0=SR 1=FR 2=MID 3=FL 4=SL.
+  char sl[4], fl[4], mid[4], fr[4], sr[4], cl[4];
+  fmt3(tofMm[4], tofValid[4], sl);   // SL  side-left
+  fmt3(tofMm[3], tofValid[3], fl);   // FL  front-left
+  fmt3(tofMm[2], tofValid[2], mid);  // MID middle
+  fmt3(tofMm[1], tofValid[1], fr);   // FR  front-right
+  fmt3(tofMm[0], tofValid[0], sr);   // SR  side-right
+  fmt3(mm, ok, cl);
+
+  char hlt[8], edg[8], mot[16];
+  snprintf(hlt, sizeof(hlt), "%d/%d", sensorsHealthyCount(), TOF_SENSOR_COUNT);
+  snprintf(edg, sizeof(edg), "%d%d%d", lineLeft, lineRear, lineRight);
+  snprintf(mot, sizeof(mot), "%d/%d", l, r);
+
+  char b[DEBUG_LINE_WIDTH + 1];
+  snprintf(b, sizeof(b),
+    "%7lu %-7s %-8d %-5d %-+7d %-7d %-7s %-6s %3s %3s %3s %3s %3s %-4s %-9s %4u %4u %4u",
+    (unsigned long)millis(), stateName((RobotState)st),
+    strategyIndex, digitalRead(PIN_START),
+    targetBearing(), targetInContact() ? 1 : 0, cl,
+    hlt, sl, fl, mid, fr, sr, edg, mot,
+    lineRaw[0], lineRaw[1], lineRaw[2]);
+
+  Serial.print('\r');
+  Serial.print(b);
+  // Pad to a constant width so a shorter row still clears the previous one.
+  for (uint8_t i = strlen(b); i < DEBUG_LINE_WIDTH; i++) Serial.print(' ');
+}
+
+#else  // !DEBUG_LIVE_LINE — the original multi-line table (scrolls)
 
 static void debugSep() {
   Serial.println(F("--------------------------------------------------------------"));
@@ -213,7 +287,10 @@ static void debugDump() {
   Serial.print(F("       R=")); Serial.println(r);
   debugSep();
 }
-#endif
+
+#endif  // DEBUG_LIVE_LINE
+
+#endif  // DEBUG_VERBOSE
 
 void setup() {
   // Serial first: the 3 s startup delay below is the natural window to watch

@@ -180,6 +180,17 @@
 //         staleness between five-sensor sweeps
 //   <50   the serial cost dominates the loop; treat the numbers as indicative
 #define DEBUG_DUMP_MS      50
+// Live status format.
+//   true  = a labelled column HEADER plus one value ROW, redrawn in place with
+//           a carriage return. No ANSI needed, so it works in any monitor, and
+//           the row never scrolls. The header is reprinted above EVERY row, so
+//           each value is always labelled.
+//   false = the original multi-line table, which scrolls the terminal every
+//           dump (that scrolling is what made the output flicker).
+// The row is DEBUG_LINE_WIDTH chars wide; keep the terminal at least that wide
+// or it wraps and the redraw smears.
+#define DEBUG_LIVE_LINE   true
+#define DEBUG_LINE_WIDTH  111
 #define SEARCH_PATTERN_TIMEOUT_MS  3000   // no opponent for this long in
                                             // SEARCH -> flip search direction
 #define ATTACK_TARGET_LOST_MS      400    // target invisible this long in

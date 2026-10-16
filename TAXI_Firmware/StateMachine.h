@@ -107,6 +107,12 @@ static const char* evadePhaseName() {
 // All state assignments go through here so every transition is logged.
 static void gotoState(RobotState s) {
   if (s == state) return;
+#if DEBUG_LIVE_LINE
+  // The live status line is redrawn in place with a carriage return and is not
+  // newline-terminated, so step onto a fresh line before logging the transition
+  // (otherwise the message would be appended to the live line).
+  Serial.print(F("\r\n"));
+#endif
   Serial.print(F("[SM] ")); Serial.print(stateName(state));
   Serial.print(F(" -> "));   Serial.print(stateName(s));
   Serial.print(F("  t=")); Serial.print(millis());

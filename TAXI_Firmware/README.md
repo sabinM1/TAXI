@@ -182,6 +182,7 @@ All in `Config.h` (pins listed in §3 are omitted here).
 | `EVADE_REVERSE_SPEED_PCT` | −80 | FLEE speed for front edges (negative = reverse) | −100..−50 |
 | `SIDE_BACKOFF_DIST_MM` / `SIDE_BACKOFF_CONFIRM_MS` / `SIDE_BACKOFF_MS` / `SIDE_BACKOFF_SPEED_PCT` / `SIDE_BACKOFF_COOLDOWN_MS` | 20 / 350 / 100 / −100 / 300 | Opponent-alongside backoff: side-ToF trigger distance, how long the reading must HOLD before it fires, reverse duration, reverse speed, and minimum gap between backoffs | 10–60 / 50–400 / 50–300 / −100..−50 / 100–800 |
 | `RING_SPEED_LED_BRIGHTNESS` | 102 | Brightness (0–255) of the LED-1 drive-speed indicator (40 %) | 0–255 |
+| `RING_DEFAULT_BRIGHTNESS` (`RingInfoDisplay.h`) | 58 | Global ring brightness (0–255), applied in `RingInit()` | 0–255 |
 | `TOF_HEALTH_MAX` | 8 | Per-sensor health counter ceiling | — |
 | `TOF_MIN_HEALTHY_SENSORS` | 3 | Fewer ToF sensors *answering* than this → degraded blind spin-search | 1–5 |
 | `DEGRADED_PUSH_SPEED_PCT` | 20 | Blind push speed in ATTACK while the bus is degraded, instead of `ATTACK_SPEED_FAR_PCT` | 10–35 |
@@ -295,7 +296,7 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
   1. `TOF_WEIGHT` (in `Sensors.h`, not `Config.h`) — how hard each sensor asks the robot to turn. The front pair at ±3 commands 75 of the ±100 the side sensors command; set them to ±4 to make a front-corner sighting turn exactly as hard as an alongside one. This is the knob for "it sees it off to a corner but does not come round onto it".
   2. `ATTACK_STEER_GAIN_PCT` — the turn-in at every speed. If the robot sweeps past the opponent, lower it; if it under-turns and slides by, raise it.
   3. `TARGET_ENGAGE_MM` — see the aggression section above.
-- Read the debug table: `Contact=1` means the middle sensor is inside `PUSH_CONTACT_DIST_MM`, i.e. the robot is in a shoving contest; `Closest=` is the distance the speed ramp is reading.
+- Read the status line: `contact 1` means the middle sensor is inside `PUSH_CONTACT_DIST_MM`, i.e. the robot is in a shoving contest; `closest` is the distance the speed ramp is reading.
 - **If the robot evades or spins while the ring clearly shows the opponent, check the `Edge` row first.** `Edge 1 1 1` on the black interior means the line thresholds are wrong for this surface — see §12.
 
 **Opening timings**
@@ -325,7 +326,7 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
 | Robot evades while still on black interior (false edge) | White threshold too high — black reads dip below it | Recalibrate white/black thresholds with `IR_Line_Test` (§10) |
 | No reaction to start signal | Module still latched on from a previous match, or wiring | If the onboard LED blinks rapidly at power-on: ask referee for stop command, then power-cycle. A0 must read LOW before the fight. |
 | Ring frozen / ToF stutter together | `FastLED.show()` interrupt blocking during a sensor read | Keep loop order: sensors → motors → ring (already enforced) |
-| Robot hunts for a long time before engaging | `TARGET_ENGAGE_MM` is small for the venue, or a ToF sensor is degraded so the closest reading is missing | Raise `TARGET_ENGAGE_MM`; check the `Health=` field in the debug table |
+| Robot hunts for a long time before engaging | `TARGET_ENGAGE_MM` is small for the venue, or a ToF sensor is degraded so the closest reading is missing | Raise `TARGET_ENGAGE_MM`; check the `health` column in the status line |
 | Ring solid white and robot unresponsive after a reset | Any reset mid-round is caught by the boot lock — the module still reports fight | Ask the referee for stop, then power-cycle. Unavoidable by design (§13) |
 | Robot restarts every ~250 ms on the bench (motors cut, then boot again) | `DEBUG_VERBOSE` build arms a 250 ms watchdog and something blocked the loop (long serial dump / host stopped reading the port) | Keep the Serial Monitor open, or set `DEBUG_VERBOSE false` and re-flash |
 | Compiles but USB port disappears mid-upload on Leonardo | Known 32U4 USB-resets | Double-tap reset, then upload within the 8 s bootloader window |
@@ -350,10 +351,10 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
 - No PID — the chase steering is a proportional correction on the live bearing only (a PD on bearing rate is the next tuning step).
 - QRE thresholds are fixed at compile time; no on-venue auto-calibration routine yet.
 - Tactic step durations are estimates pending on-dohyo calibration (§11).
-- M60F reads return the last stored value in ~0.75 ms, but under active ranging the sensor MCU can hold the bus for its full sampling budget (reg `0xB0` = 12 ms); `TOF_TIMEOUT_MS` is 15 to cover that. Only one sensor is polled per loop, so a dead sensor bounds the loop at ~15 ms, not 5 × 15 ms.
+- M60F reads return the last stored value in ~0.75 ms, but under active ranging the sensor MCU can hold the bus for its full sampling budget (reg `0xB0` = 45 ms); `TOF_TIMEOUT_MS` is 55 to cover that. Only one sensor is polled per loop, so a dead sensor bounds the loop at ~55 ms, not 5 × 55 ms.
 - **No watchdog in a match build** (`DEBUG_VERBOSE false`), on purpose: a hung loop keeps the last motor command (which in sumo often still finishes the push) instead of rebooting the robot. Bench builds do arm it at 250 ms — the full reasoning is at the top of `TAXI_Firmware.ino`.
 - **Any reset during a round ends that round.** On the way back up the start module still reads HIGH, so `setup()` hits the boot lock and the robot blinks until someone power-cycles it. That is the same rule that catches a latched-on module before a match, so it is intentional — but it means a brownout or EMI reset has no in-match recovery path.
-- `DEBUG_VERBOSE` builds are not timing-equivalent to match builds: the 400 ms serial table blocks the loop for ~50 ms per dump, sensor readings go correspondingly staler, and the watchdog is armed. Use them to observe, not to tune feel.
+- `DEBUG_VERBOSE` builds are not timing-equivalent to match builds: the serial status line blocks the loop for a few ms per dump, sensor readings go correspondingly staler, and the watchdog is armed. Use them to observe, not to tune feel.
 - All five ToF sensors are polled in every state, so a full sweep takes ~10 ms. If a future change needs faster front-sensor updates, the round-robin in `tofReadOne()` is the place to reintroduce a scan mode — but note that BACKOFF and the chase both depend on the side sensors being live.
 
 ---
