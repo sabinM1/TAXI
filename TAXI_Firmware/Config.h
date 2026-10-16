@@ -143,12 +143,12 @@
 //
 // Debug print order (lineRaw[0..2]): 0 = LEFT, 1 = REAR, 2 = RIGHT.
 // Calibration (verified on the robot, raw ADC 0-1023):
-#define LINE_LEFT_WHITE_THRESHOLD   565   // LEFT  (A5) raw BELOW this = white border
-#define LINE_LEFT_BLACK_THRESHOLD   800   // LEFT  (A5) raw ABOVE this = black interior
-#define LINE_REAR_WHITE_THRESHOLD   765   // REAR  (A4) raw BELOW this = white border
-#define LINE_REAR_BLACK_THRESHOLD   835   // REAR  (A4) raw ABOVE this = black interior
-#define LINE_RIGHT_WHITE_THRESHOLD  565   // RIGHT (A1) raw BELOW this = white border
-#define LINE_RIGHT_BLACK_THRESHOLD  800   // RIGHT (A1) raw ABOVE this = black interior
+#define LINE_LEFT_WHITE_THRESHOLD   600   // LEFT  (A5) raw BELOW this = white border
+#define LINE_LEFT_BLACK_THRESHOLD   750   // LEFT  (A5) raw ABOVE this = black interior
+#define LINE_REAR_WHITE_THRESHOLD   780   // REAR  (A4) raw BELOW this = white border
+#define LINE_REAR_BLACK_THRESHOLD   810   // REAR  (A4) raw ABOVE this = black interior
+#define LINE_RIGHT_WHITE_THRESHOLD  600   // RIGHT (A1) raw BELOW this = white border
+#define LINE_RIGHT_BLACK_THRESHOLD  750   // RIGHT (A1) raw ABOVE this = black interior
 #define LINE_DEBOUNCE_SAMPLES       2     // consecutive white reads to confirm edge
 
 // ============================================================================
