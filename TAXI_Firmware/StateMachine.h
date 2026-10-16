@@ -141,9 +141,10 @@ static void startModuleUpdate() {
 // lag a pivot the way the old bearing memory did.
 static int8_t lastSeenBearing = 0;
 static bool   lastSeenValid   = false;
-// Did the most recent targetBearing() call have an actual sensor reading (however
-// far)? Distinguishes "steering on a live reading" from "steering on the memory"
-// — only the former may hold ATTACK against the lost-target timeout.
+// Did the most recent targetBearing() call have a CLOSE live sensor reading?
+// Only a reading inside TARGET_ENGAGE_MM may hold ATTACK against the
+// lost-target timeout; far sightings must never keep the rush alive by
+// refreshing it with a bearing that targetBearing() then replaces with memory.
 static bool   bearingRawSeen = false;
 
 /**
@@ -151,12 +152,17 @@ static bool   bearingRawSeen = false;
  *
  *   close sighting (<= TARGET_ENGAGE_MM) -> the live reading, and it becomes the
  *                                           remembered direction
- *   far sighting, or nothing             -> the remembered direction, if any
+ *   far SIDE-dominant sighting           -> the live side-led reading overrides
+ *                                           the remembered direction
+ *   other far sighting, or nothing       -> the remembered direction, if any
  *   nothing remembered yet               -> the far reading as-is, or 127
  *
- * The far case is the point of the memory: at long range the ToF bearing is weak
- * and jumpy, so steering on where the opponent was last actually seen is a better
- * bet than on a faint far reading.
+ * The other-far case is the point of the memory: at long range the ToF bearing is
+ * weak and jumpy, so steering on where the opponent was last actually seen is a
+ * better bet than on a faint far reading. A live SIDE-dominant sighting is
+ * trusted even at long range; that keeps a far side opponent from being abandoned
+ * to a stale frontal memory after the front-trio gate was removed. Front-led far
+ * sightings keep the old memory-first behaviour.
  *
  * No smoothing anywhere: a lagging bearing makes the robot keep pivoting after it
  * has already swept past the opponent, and with the correction scaled by the base
@@ -168,10 +174,21 @@ static bool   bearingRawSeen = false;
 static int8_t targetBearing() {
   int8_t raw = sensorsOpponent();
   bool ok; uint16_t mm = sensorsClosestMm(&ok);
-  bearingRawSeen = (raw != 127);
+  bool closeSeen = (raw != 127 && ok && mm <= TARGET_ENGAGE_MM);
+  bearingRawSeen = closeSeen;
 
   // Close enough to be a real, trustworthy sighting: remember it, steer on it.
-  if (raw != 127 && ok && mm <= TARGET_ENGAGE_MM) {
+  if (closeSeen) {
+    lastSeenBearing = raw;
+    lastSeenValid   = true;
+    return raw;
+  }
+
+  // A side-dominant reading is trustworthy even beyond the engage range.
+  // Without this, an old frontal memory could overrule a live side opponent and
+  // make the attack drive straight past it. Front-led far readings keep the
+  // existing memory-first behaviour.
+  if (sensorsSideDominant(raw)) {
     lastSeenBearing = raw;
     lastSeenValid   = true;
     return raw;
@@ -524,10 +541,13 @@ void stateMachineUpdate() {
   // gap. The condition must HOLD for SIDE_BACKOFF_CONFIRM_MS first, so a single
   // grazing frame or a stale reading cannot fire the reverse. Checked AFTER the
   // line-edge override above, which therefore always wins: the reverse can never
-  // bypass the edge check. The cooldown stops a target that stays alongside from
-  // making the robot back up forever.
+  // bypass the edge check. EVADE is excluded too: during its turn phase the edge
+  // has already cleared, and replacing that pivot with straight reverse could push
+  // the robot back across the border it is escaping. The cooldown stops a target
+  // that stays alongside from making the robot back up forever.
   uint32_t sideHeldMs = sideCloseHeldMs();
-  if (state != ST_BACKOFF && state != ST_IDLE && state != ST_STOP &&
+  if (state != ST_BACKOFF && state != ST_EVADE &&
+      state != ST_IDLE && state != ST_STOP &&
       sideHeldMs >= SIDE_BACKOFF_CONFIRM_MS &&
       (uint32_t)(millis() - backoffStart) >= SIDE_BACKOFF_MS + SIDE_BACKOFF_COOLDOWN_MS) {
     backoffStart    = millis();
@@ -599,10 +619,16 @@ void stateMachineUpdate() {
           gotoState(ST_ATTACK);
           break;
         }
-        // Visible but still outside the engagement range: turn slowly onto it and
-        // close in, so a distant sighting is not lost without committing to a
-        // charge on a bearing that is not trustworthy yet.
-        steerToward(SEARCH_SPEED_PCT, sighted);
+        // Visible but still outside the engagement range: turn onto it and close
+        // in without committing to a charge. A SIDE-dominant reading gets extra
+        // gain at the same search base: the inner wheel reverses while the outer
+        // still drives, so a far side opponent is turned onto instead of only
+        // arced toward. Front-led approaches keep the normal gain, preserving
+        // their existing turn rate.
+        int approachGain = sensorsSideDominant(sighted)
+                         ? SEARCH_SIDE_STEER_GAIN_PCT
+                         : ATTACK_STEER_GAIN_PCT;
+        steerToward(SEARCH_SPEED_PCT, sighted, approachGain);
         break;
       }
 

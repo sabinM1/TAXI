@@ -331,6 +331,14 @@ static const struct AttackSpeedPoint { uint16_t mm; uint8_t pct; } ATTACK_SPEED_
 // Step it up ~20 at a time and re-test; the next step from here is 140.
 #define ATTACK_STEER_GAIN_PCT  120
 
+// SEARCH usually approaches a far sighting gently, so its base speed (30) with
+// the normal 120% gain yields only a small correction. A live, side-dominant
+// opponent needs a real pivot even while outside TARGET_ENGAGE_MM. At base 30,
+// 200% gives a correction of 60 at full bearing: the inner wheel runs at -30%
+// while the outer reaches +90%, so the robot turns hard without switching to a
+// blind in-place search pattern. Front-led approaches keep the normal gain.
+#define SEARCH_SIDE_STEER_GAIN_PCT 200
+
 #define SEARCH_SPEED_PCT        30   // base speed of every search pattern, and of
                                      // the approach leg when a far sighting is
                                      // being turned onto — i.e. the speed
@@ -347,14 +355,15 @@ static const struct AttackSpeedPoint { uint16_t mm; uint8_t pct; } ATTACK_SPEED_
 // ============================================================================
 //
 // The two SIDE ToF sensors (ID1 side right, ID5 side left) look perpendicular to
-// the robot, so an opponent they see at close range is ALONGSIDE — a position the
-// front sensors cannot act on (and sensorsOpponent() lets the front trio outrank
-// the sides, so the bearing ignores them). Instead of trying to turn onto it, the
-// robot reverses hard for a moment to open the gap, then hands back to SEARCH,
-// which turns to bring the opponent onto the front sensors.
+// the robot, so an opponent they see at close range is ALONGSIDE. The bearing
+// vote (inverse-distance-squared) naturally lets side sensors dominate when the
+// opponent is alongside, so the robot turns aggressively onto it. At very close
+// range (SIDE_BACKOFF_DIST_MM) the side-backoff triggers a hard reverse to open
+// the gap, then SEARCH turns to bring the opponent onto the front sensors.
 //
 // NOTE: the sides are always polled (there is no front-only scan any more), so
-// this is free to fire from ANY state, ATTACK included.
+// this can fire from normal combat states, ATTACK included. It deliberately
+// cannot interrupt EVADE.
 #define SIDE_BACKOFF_DIST_MM      20   // side ToF distance that triggers the
                                        // reverse. Tightened from 30 mm: the side
                                        // sensors are perpendicular, so a slightly

@@ -61,17 +61,11 @@ bool     tofValid[TOF_SENSOR_COUNT];
 // turn is still not enough, the lever is ATTACK_STEER_GAIN_PCT (Config.h), which
 // scales the correction against the base speed for every bearing.
 //
-// The front trio outranking the sides (see sensorsOpponent()) is what stops a
-// side reading from interfering while the front can see the target, so both pairs
-// carrying the same weight can never fight: the sides are ignored outright
-// whenever any front sensor has a reading, and the inverse-distance-squared
-// falloff decides the heading among the front trio alone.
+// All five sensors vote with inverse-distance-squared weighting. The closest
+// sensor dominates, so side sensors naturally win when the opponent is alongside,
+// front sensors win when the opponent is ahead. No front-trio gate is used.
 static const int8_t TOF_WEIGHT[TOF_SENSOR_COUNT] = { 4, 4, 0, -4, -4 };
 #define TOF_WEIGHT_SCALE 25
-
-// The three FRONT sensors (ids 2, 3, 4) are indices 1..3. sensorsOpponent() uses
-// this to let the front trio outrank the two side sensors — see the note there.
-static inline bool tofIsFrontIndex(uint8_t i) { return i >= 1 && i <= 3; }
 
 static SingleWireSerial tofBus(false);           // bus on D4 (Config: PIN_TOF_BUS)
 static DistanceSensor tofSensors[TOF_SENSOR_COUNT] = {
@@ -223,36 +217,31 @@ int8_t sensorsEdgeIndex() {
  * sensor contributes its geometric weight scaled by INVERSE DISTANCE SQUARED —
  * see the WEIGHT note in the loop body for why the falloff is squared.
  *
- * The three FRONT sensors outrank the two side ones: as soon as any of the front
- * trio has a reading, the sides are ignored. Their geometric weight is the
- * largest (+/-4), so a single close side reflection — the opponent's blade edge,
- * a wall, a hand — would otherwise outvote the sensors that are actually looking
- * at the target and throw the heading off. The sides still decide on their own
- * when nothing in front can see anything, which is exactly the "opponent is beside
- * me" case the side-backoff state exists for.
+ * All five sensors vote with inverse-distance-squared weighting. The geometric
+ * weights (+/-4 for outer sensors, 0 for center) are STEERING AUTHORITY, not
+ * measured angles. Front-outer and side sensors share the same max weight so a
+ * target at a front corner commands the same turn rate as one alongside — both
+ * need aggressive correction. The squared falloff makes the closest sensor
+ * decide the heading: side sensors naturally win when the opponent is alongside
+ * (close), front sensors win when the opponent is ahead (close). No front-trio
+ * gate is used; the old one caused the center sensor (weight 0) to silence side
+ * sensors when the opponent was beside the robot.
  */
 int8_t sensorsOpponent() {
-  bool frontSeen = tofValid[1] || tofValid[2] || tofValid[3];
   int32_t wsum = 0, wtot = 0;
   for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++) {
     if (!tofValid[i]) continue;
-    if (frontSeen && !tofIsFrontIndex(i)) continue;
 
-    // WEIGHT: linear distance (the old `TOF_MAX_VALID_MM + 1 - mm`) gave a
-    // 500 mm reading roughly half the say of a 170 mm one, so a far reflection on
-    // ONE side cancelled a close one on the other and the vote came out
-    // "dead ahead" — the robot drove straight past an opponent it could clearly
-    // see (e.g. front-left at 170 mm against front-right at 500 mm averaged to a
-    // bearing of ~-17, inside the old ATTACK dead zone, so the robot drove on
-    // past). Squaring the same term makes the weight collapse far faster with
-    // distance: the same pair now reads ~-31, i.e. a real steering correction. The
-    // closest sensor therefore decides the heading, which is what makes the robot
-    // commit to what it is about to hit instead of averaging that away against
-    // something further off.
-    //
-    // Integer-safe: w <= (800+1)^2 = 641601 and the largest term is
-    // 4 * 25 * 641601 ~= 6.4e7, so the 5-sensor sum stays far inside int32.
-    // It is a pure ratio, so the absolute scale cancels in wsum / wtot.
+    // WEIGHT: inverse distance squared. A close reading dominates the vote.
+    // The geometric weights (+/-4 for outer sensors, 0 for center) are STEERING
+    // AUTHORITY, not measured angles. Front-outer and side sensors share the
+    // same max weight so a target at a front corner commands the same turn rate
+    // as one alongside — both need aggressive correction.
+    // The squared falloff makes the closest sensor decide the heading, which
+    // naturally lets side sensors win when the opponent is alongside (close),
+    // and front sensors win when the opponent is ahead (close). No frontSeen
+    // gate is needed; it only caused the center sensor (weight 0) to silence
+    // side sensors when the opponent was beside the robot.
     int32_t w = (int32_t)TOF_MAX_VALID_MM + 1 - tofMm[i];   // near -> heavy
     w *= w;                                                 // squared falloff
     wsum += (int32_t)TOF_WEIGHT[i] * TOF_WEIGHT_SCALE * w;
@@ -293,6 +282,33 @@ uint16_t sensorsClosestMm(bool* ok) {
     if (tofValid[i] && tofMm[i] < best) best = tofMm[i];
   *ok = (best != 0xFFFF);
   return *ok ? best : 0;
+}
+
+/**
+ * True when the bearing is led by the closer SIDE sensor: that side is no
+ * farther than every valid front reading and its direction agrees with the
+ * weighted vote. This distinguishes a genuinely side-dominant opponent from a
+ * mixed vote where an opposite front sensor is actually closer. The center
+ * sensor is included in frontBest even though its steering weight is 0.
+ */
+bool sensorsSideDominant(int8_t bearing) {
+  if (bearing == 127 || bearing == 0) return false;
+
+  uint16_t frontBest = 0xFFFF;
+  for (uint8_t i = 1; i <= 3; i++)
+    if (tofValid[i] && tofMm[i] < frontBest) frontBest = tofMm[i];
+
+  uint16_t right = tofValid[0] ? tofMm[0] : 0xFFFF;
+  uint16_t left  = tofValid[4] ? tofMm[4] : 0xFFFF;
+  if (left == 0xFFFF && right == 0xFFFF) return false;
+
+  int8_t sideDir;
+  uint16_t sideBest;
+  if (left < right)      { sideDir = -1; sideBest = left; }
+  else if (right < left) { sideDir =  1; sideBest = right; }
+  else return false;                         // equal sides: no side lead
+
+  return sideDir == (bearing > 0 ? 1 : -1) && sideBest <= frontBest;
 }
 
 #endif // SENSORS_H

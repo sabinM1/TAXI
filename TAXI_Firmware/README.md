@@ -10,7 +10,7 @@ TAXI is an autonomous mini sumo robot: it waits for the competition start signal
 
 Architecture: `QRE1113 edge sensors + M60F ToF array → ATmega32U4 (XMotion V3) → dual H-bridge → 2× JSUMO Core 6V 400 RPM motors`, with `DIP switches → configuration input` and `WS2812 ring + USB serial → status output`. All speeds are compile-time constants (no trimpot master knob, see §7).
 
-The combat flow is a finite state machine: `IDLE → TACTIC → SEARCH → ATTACK`, with `BACKOFF` (opponent alongside) and `EVADE` (edge) as overrides from any combat state, and `STOP` on loss of the start signal. SEARCH and ATTACK are separated by a single distance (`TARGET_ENGAGE_MM`), and both use the same steering law — there is no separate pivot state.
+The combat flow is a finite state machine: `IDLE → TACTIC → SEARCH → ATTACK`, with `EVADE` (edge) overriding every combat state and `BACKOFF` (opponent alongside) overriding the non-evade combat states. `STOP` occurs on loss of the start signal. SEARCH and ATTACK are separated by a single distance (`TARGET_ENGAGE_MM`), and both use the same steering law — there is no separate pivot state.
 
 ---
 
@@ -65,7 +65,7 @@ All pin numbers match `Config.h` exactly. Motors are driven directly by the onbo
 
 - Sensors 1, 2, 4, 5 answer register `0x06` in **cm**; sensor 3 answers register `0x01` in **mm**.
 - No-response sentinels: `0xFF` (cm), `0xFFF` (mm); valid window 9–800 mm.
-- Steering authority per sensor (`TOF_WEIGHT` in `Sensors.h`, left→right): **4 / 3 / 0 / 3 / 4**, scaled by `TOF_WEIGHT_SCALE = 25`. A sighting on a side sensor alone therefore commands a full ±100 bearing, a front-outer sensor alone ±75, and the middle sensor alone 0 (dead ahead, but it only sets the *direction*, never the strength).
+- Steering authority per sensor (`TOF_WEIGHT` in `Sensors.h`, array order right-side/right-front/middle/left-front/left-side): **+4 / +4 / 0 / −4 / −4**, scaled by `TOF_WEIGHT_SCALE = 25`. A side or front-outer sensor alone commands a full ±100 bearing; the middle sensor commands 0 (dead ahead). All valid sensors vote, weighted by squared proximity.
 
 **Reserved / do-not-touch pins:** D0/D1 (Serial1 — free but avoid conflict with USB debugging assumptions), D2 (Leonardo SDA, free), plus anything the USB stack owns. No level shifting anywhere: all external modules run at 5 V logic.
 
@@ -120,9 +120,9 @@ loop():  sensorsUpdate()      // 1 ToF read + 1 line pass — ALL serial I/O
 |---|---|
 | `ST_IDLE` | Motors stopped; waits for start signal HIGH (read raw each loop) |
 | `ST_TACTIC` | Plays the DIP-selected opening timed-step sequence, then → SEARCH. Runs to completion; only the line-edge override (EVADE) can interrupt it |
-| `ST_SEARCH` | Spin/arc/sweep pattern at `SEARCH_SPEED_PCT`; flips direction every 3 s if blind. A sighting **beyond** `TARGET_ENGAGE_MM` is turned onto slowly (same steering law, search speed) without committing; inside `TARGET_ENGAGE_MM` → ATTACK |
+| `ST_SEARCH` | Spin/arc/sweep pattern at `SEARCH_SPEED_PCT`; flips direction every 3 s if blind. A front sighting **beyond** `TARGET_ENGAGE_MM` uses the normal approach gain without committing; a side-dominant sighting uses `SEARCH_SIDE_STEER_GAIN_PCT` for a hard turn at search speed; inside `TARGET_ENGAGE_MM` → ATTACK |
 | `ST_ATTACK` | Opponent inside `TARGET_ENGAGE_MM`: speed from the `ATTACK_SPEED_RAMP` table (35 % at the engage distance, 100 % inside `ATTACK_CLOSE_DIST_MM`) + one proportional steering term (`steerToward()`, scaled by base speed, so a hard bearing counter-rotates the inner wheel). All 5 ToF sensors stay polled. At blade contact (≤ `PUSH_CONTACT_DIST_MM` on the middle sensor) both wheels go flat out and the steering trim is skipped |
-| `ST_BACKOFF` | Opponent alongside (a SIDE ToF at ≤ `SIDE_BACKOFF_DIST_MM` **held** for `SIDE_BACKOFF_CONFIRM_MS`): reverse flat out for `SIDE_BACKOFF_MS`, then → SEARCH. Rate-limited by `SIDE_BACKOFF_COOLDOWN_MS`; the line-edge override still outranks it |
+| `ST_BACKOFF` | Opponent alongside (a SIDE ToF at ≤ `SIDE_BACKOFF_DIST_MM` **held** for `SIDE_BACKOFF_CONFIRM_MS`): reverse flat out for `SIDE_BACKOFF_MS`, then → SEARCH. Rate-limited by `SIDE_BACKOFF_COOLDOWN_MS`; the line-edge override still outranks it, and it cannot interrupt an EVADE turn |
 | `ST_EVADE` | Edge override, two timed phases: FLEE (≥35 ms blind reverse, keeps fleeing while any sensor reads white, ≤300 ms; rear edge drives **forward**) → TURN (fixed 120 ms pivot away from the edge) → SEARCH |
 | `ST_STOP` | Start signal lost → motors off, latched until power cycle |
 
@@ -133,8 +133,9 @@ loop():  sensorsUpdate()      // 1 ToF read + 1 line pass — ALL serial I/O
 | `Motor.h` | `motorsSet(l, r)` | Signed-percent drive, applies bench cap + left-motor inversion |
 | | `motorsStop()` | Coast both motors |
 | `Sensors.h` | `sensorsUpdate()` | One ToF poll + one line pass per loop |
-| | `sensorsOpponent()` | Bearing −100..+100 (127 = nothing), weighted vote: per-sensor steering authority `TOF_WEIGHT` `{4, 3, 0, −3, −4}` (side, front-outer, middle, front-outer, side) × inverse distance **squared**, so the closest sensor dominates; the front trio outranks the side sensors |
-| `StateMachine.h` | `targetBearing()` | The bearing actually steered on: the live reading, or the remembered last-seen direction when the sensors only see something far away or nothing |
+| `Sensors.h` | `sensorsOpponent()` | Bearing −100..+100 (127 = nothing), weighted vote: per-sensor steering authority `TOF_WEIGHT` `{4, 4, 0, −4, −4}` (side, front-outer, middle, front-outer, side) × inverse distance **squared**, so the closest sensor dominates; all five sensors vote, no front-trio gate |
+| `StateMachine.h` | `targetBearing()` | The bearing actually steered on: close readings win, side-dominant far readings override memory, and other far readings use the remembered last-seen direction |
+| `Sensors.h` | `sensorsSideDominant(bearing)` | True when the closer side ToF is no farther than every valid front reading and agrees with the bearing direction |
 | | `enterSearch()` | Begins a search; biases the first leg toward the last-seen direction |
 | | `sensorsClosestMm()` | Nearest valid distance |
 | | `sensorsContact()` | True when the MIDDLE sensor reads blade contact (<`PUSH_CONTACT_DIST_MM`) |
@@ -174,7 +175,8 @@ All in `Config.h` (pins listed in §3 are omitted here).
 | `ATTACK_CLOSE_DIST_MM` | 60 | Full power from here in. Deliberately equal to `PUSH_CONTACT_DIST_MM`, so the speed is already at `PUSH_CONTACT_SPEED_PCT` when the contact latch takes over | 20–800 |
 | `ATTACK_SPEED_RAMP` (table, `Config.h`) | 300→35, 200→45, 100→60, 60→100 | **The attack speed profile** — (distance, speed) anchors interpolated linearly in the closest ToF reading. Gives >300 mm `SEARCH_SPEED_PCT`, then 300→35 %, 250→40 %, 200→45 %, 150→53 %, 100→60 %, 80→80 %, ≤60→100 %. Far → near order | anchors 20–800 mm, 0–100 % |
 | `PUSH_CONTACT_DIST_MM` / `PUSH_CONTACT_SPEED_PCT` / `CONTACT_LATCH_MS` | 60 / 100 / 250 | MIDDLE ToF contact distance, the flat speed used there (both wheels, no steering trim), and how long contact stays latched after the last sighting | 20–120 / 60–100 / 100–500 |
-| `ATTACK_STEER_GAIN_PCT` | 100 | The turn-in: differential at bearing ±100 as a % of the current base speed. At attack speed this counter-rotates the inner wheel; at search speed the same bearing is a gentle arc | 50–150 |
+| `ATTACK_STEER_GAIN_PCT` | 120 | The turn-in: differential at bearing ±100 as a % of the current base speed. At attack speed this counter-rotates the inner wheel | 50–150 |
+| `SEARCH_SIDE_STEER_GAIN_PCT` | 200 | Extra approach gain used only for a side-dominant live vote beyond `TARGET_ENGAGE_MM`; at base 30% and full bearing it commands −30/+90 instead of a gentle arc | 120–250 |
 | `TARGET_ENGAGE_MM` | 300 | **The** mode switch. SEARCH commits to ATTACK inside this distance, and a sighting inside it is also the one trusted/remembered as "last seen" | 100–800 |
 | `SEARCH_SPEED_PCT` | 30 | Base speed of every search pattern and of the far-sighting approach leg — the speed everywhere outside `TARGET_ENGAGE_MM` | 5–80 |
 | `EVADE_REVERSE_SPEED_PCT` | −80 | FLEE speed for front edges (negative = reverse) | −100..−50 |
