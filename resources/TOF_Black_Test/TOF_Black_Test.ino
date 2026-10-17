@@ -45,6 +45,9 @@
 #define TOF_TIMEOUT_MS 15
 #define SENSOR_ID      3
 
+// Which sensor the 'n' empty-space noise sweep runs on.
+#define NOISE_SENSOR_ID 2
+
 SingleWireSerial bus(false);
 DistanceSensor sensor(&bus, SENSOR_ID);
 
@@ -442,10 +445,12 @@ static const uint16_t NOISE_B5[] = { 0, 5, 10, 15, 20, 25, 30, 40, 60 };
 #define NOISE_SAMPLE_MS 400
 
 static void runNoise() {
+  DistanceSensor& s = allSensors[NOISE_SENSOR_ID - 1];
   uint16_t b0 = rd(0xB0), b6 = rd(0xB6);
   Serial.println();
   Serial.println(F("=== EMPTY-SPACE NOISE FLOOR ==="));
   Serial.println(F("Point the sensor at >1.5 m of empty space (no target)."));
+  Serial.print(F("sensor id ")); Serial.println(NOISE_SENSOR_ID);
   Serial.print(F("B4 x B5 = "));
   Serial.print(sizeof(NOISE_B4)/2); Serial.print('x');
   Serial.print(sizeof(NOISE_B5)/2);
@@ -458,10 +463,10 @@ static void runNoise() {
   for (uint8_t i = 0; i < sizeof(NOISE_B4)/2; i++)
   for (uint8_t j = 0; j < sizeof(NOISE_B5)/2; j++) {
     uint16_t b4 = NOISE_B4[i], b5 = NOISE_B5[j];
-    sensor.writeRegister(0xB4, b4);
-    sensor.writeRegister(0xB5, b5);
-    sensor.saveConfiguration();
-    sensor.restartSensor();
+    s.writeRegister(0xB4, b4);
+    s.writeRegister(0xB5, b5);
+    s.saveConfiguration();
+    s.restartSensor();
     delay(400);
     Acc acc; accReset(acc);
     for (uint8_t r = 0; r < NOISE_REPS; r++) {

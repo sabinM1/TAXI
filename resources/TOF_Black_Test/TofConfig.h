@@ -21,18 +21,18 @@
 // TOF_TIMEOUT_MS (55 in TAXI_Firmware/Config.h).
 #define TOF_CFG_B0  50
 
-// Range checks (reg 0xB4). 0xFE = 254 enables ALL checks, including the
-// wrap/phase pair (bits 1-2) that the factory default 0xF8 = 248 leaves off.
-// Those two checks are what removed the large-distance phantom readings on
-// empty space: 23 false positives at 248 dropped to 1 harmless one at 254.
-#define TOF_CFG_B4  254
+// Range checks (reg 0xB4). 0xF8 = 248 leaves the wrap/phase pair (bits 1-2)
+// off. The empty-space B4 x B5 sweep on sensor 2 put 248 at the floor (1%
+// valid, 8/670) with tight spread (dStd 92, dMax 346), beating 254's 9%.
+#define TOF_CFG_B4  248
 
 // Signal threshold (reg 0xB5). The black return is weak (sigAvg ~4 at 300 mm),
-// so this must stay LOW or the target itself is rejected. 30 keeps black
-// detection while trimming the weakest phantoms; higher values kill black.
+// so this must stay LOW or the target itself is rejected. 15 was the floor of
+// the empty-space B4 x B5 sweep on sensor 2 (1% valid, 8/670); higher values
+// did not improve on it.
 // NOTE: this is NOT compared against register 0x02 (a row can show sigMax below
 // B5 and still pass) — trust the valid bit.
-#define TOF_CFG_B5  30
+#define TOF_CFG_B5  15
 
 // Sigma threshold (reg 0xB6), millimetres. Must be high: the black return is
 // noisy (sigma ~220-330 mm), so a low value rejects the target itself.
