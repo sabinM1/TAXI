@@ -102,11 +102,16 @@ static uint8_t strategyIndex = 0;
  * Hardware quirk (xmotion_basics_101.md): switch DOWN = pin reads 1, and
  * DOWN is the OFF position. So digitalRead() returns 1 for OFF — we invert
  * so the resulting index matches the printed markings (000 = strategy 0).
+ *
+ * Bit order: the switch markings read MSB-first (leftmost switch = bit 2), but
+ * the pins are wired the other way round — PIN_DIP1 is the RIGHTMOST switch.
+ * So PIN_DIP1 maps to bit 2 and PIN_DIP3 to bit 0, which makes the printed
+ * marking (e.g. 100) match the resulting index (4), not its mirror (1).
  */
 static uint8_t dipRead() {
-  return ((!digitalRead(PIN_DIP1)) ? 1 : 0)
+  return ((!digitalRead(PIN_DIP1)) ? 4 : 0)
        | ((!digitalRead(PIN_DIP2)) ? 2 : 0)
-       | ((!digitalRead(PIN_DIP3)) ? 4 : 0);
+       | ((!digitalRead(PIN_DIP3)) ? 1 : 0);
 }
 
 /**

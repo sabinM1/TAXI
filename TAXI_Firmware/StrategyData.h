@@ -11,6 +11,12 @@
  * Dohyo 77 cm | robot 10x10 cm
  * Calibration: 60 cm/s straight @ 100% duty, 750 deg/s @ full differential.
  *
+ * NOTE: the 750 deg/s turn rate is WRONG for this robot. A full-differential
+ * spin measured ~220 deg/s (a full turn in ~1.6 s), so every arc in this file
+ * under-turns by ~3x. The proper fix is to set the turn rate in
+ * tools/strategy-designer.html to the measured value and re-export; the s5/s6
+ * differentials below were hand-tuned as a stopgap.
+ *
  * Each STRATEGIES row carries the start pose that opening assumes:
  *   { x, y, heading }  — x/y in cm from centre (+x right, +y toward the
  *   opponent), heading in degrees (0 = up, + = clockwise). The opening is
@@ -55,24 +61,34 @@
 // slot 0: Rush (dash)
 static const TacticStep s0[] = { {100,100,600} };
 // slot 1: Angled rush (right)
-static const TacticStep s1[] = { {100,100,550} };
+// Straight dash, then a RIGHT spin at the end to face back toward the middle.
+// The spin is {left,right} = {-100,100} (right wheel forward, left back).
+static const TacticStep s1[] = { {100,100,300}, {-100,100,50} };
 // slot 2: Angled rush (left)
-static const TacticStep s2[] = { {100,100,550} };
+// Mirror of slot 1: straight dash, then a LEFT spin {100,-100}.
+static const TacticStep s2[] = { {100,100,300}, {100,-100,50} };
 // slot 3: Flank (right)
-static const TacticStep s3[] = { {100,100,200}, {-100,100,120} };
+static const TacticStep s3[] = { {100,100,180}, {-100,100,35} };
 // slot 4: Flank (left)
-static const TacticStep s4[] = { {100,100,200}, {100,-100,120} };
+static const TacticStep s4[] = { {100,100,180}, {100,-100,35} };
 // slot 5: Edge flank (right)
-static const TacticStep s5[] = { {67,100,1616}, {-100,100,90} };
+// TURN and RADIUS trade off. Turn (deg) ~= 1.125 * (right-left) * seconds.
+// Radius R = (wheelbase/2) * (right+left)/(right-left): a big differential
+// turns a lot but in a tiny circle (spins in place), a small one drives
+// forward but barely turns. {-30,100} spun in place (R ~ 3 cm); this is a
+// wider arc: {50,100} -> R ~ 15 cm, ~140 deg over 2.5 s. Tune the left value
+// down for a wider arc, up for more turn; lengthen ms to turn more without
+// tightening the arc.
+static const TacticStep s5[] = { {32,100,800}, {-100,100,90} };
 // slot 6: Edge flank (left)
-static const TacticStep s6[] = { {100,67,1616}, {100,-100,90} };
+static const TacticStep s6[] = { {100,32,800}, {100,-100,90} };
 // slot 7: Bait-and-flank (right)
-static const TacticStep s7[] = { {-100,-100,80}, {100,100,600} };
+static const TacticStep s7[] = { {-100,-100,100}, {100,100,550} };
 
 static const Strategy STRATEGIES[8] = {
   { s0, 1, SEARCH_SPIN,  { 0, -25, 0 },    390 },    // 0: Rush (dash)
-  { s1, 1, SEARCH_ARC,   { 0, -25, 30 },   358 },    // 1: Angled rush (right)
-  { s2, 1, SEARCH_ARC,   { 0, -25, -30 },  358 },    // 2: Angled rush (left)
+  { s1, 2, SEARCH_ARC,   { 0, -25, 30 },   300 },    // 1: Angled rush (right)
+  { s2, 2, SEARCH_ARC,   { 0, -25, -30 },  300 },    // 2: Angled rush (left)
   { s3, 2, SEARCH_ARC,   { 8, -25, 45 },   208 },    // 3: Flank (right)
   { s4, 2, SEARCH_ARC,   { -8, -25, -45 }, 208 },    // 4: Flank (left)
   { s5, 2, SEARCH_ARC,   { 8, -25, 90 },   0 },      // 5: Edge flank (right) — blind
