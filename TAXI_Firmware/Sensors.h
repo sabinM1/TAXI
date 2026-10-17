@@ -78,6 +78,10 @@ static uint8_t tofCursor = 0;                    // round-robin position
 // Simple health counters per sensor (0..TOF_HEALTH_MAX).
 static uint8_t tofHealth[TOF_SENSOR_COUNT];
 
+// Consecutive-valid streak per sensor, for the phantom filter (see Config.h).
+// A reading is only published once the streak reaches TOF_CONSECUTIVE_VALID.
+static uint8_t tofStreak[TOF_SENSOR_COUNT];
+
 // Number of sensors currently considered alive. A sensor is "healthy" when
 // its health counter is at least half full — i.e. it has been answering
 // consistently for the last few polls.
@@ -112,6 +116,7 @@ void sensorsInit() {
   lineSensB.begin();
   for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++) {
     tofMm[i] = 0; tofValid[i] = false; tofHealth[i] = TOF_HEALTH_MAX;
+    tofStreak[i] = 0;
   }
 }
 
@@ -148,6 +153,24 @@ static void tofReadOne() {
   }
   tofValid[i] = ok;
   tofMm[i]    = ok ? mm : 0;
+
+  // Phantom filter: only publish a reading once the sensor has produced
+  // TOF_CONSECUTIVE_VALID valid reads in a row. A real target reads valid on
+  // consecutive polls; an empty-space phantom is a stray frame, so it never
+  // reaches the streak and is dropped. The streak is capped so it cannot wrap.
+  //
+  // NOTE: this gates the PUBLISHED value, not the raw read. tofValid[]/tofMm[]
+  // are what every consumer (sensorsOpponent, sensorsContact, ...) sees, so the
+  // filter applies everywhere without touching those functions.
+  if (ok) {
+    if (tofStreak[i] < TOF_CONSECUTIVE_VALID) tofStreak[i]++;
+  } else {
+    tofStreak[i] = 0;
+  }
+  if (tofStreak[i] < TOF_CONSECUTIVE_VALID) {
+    tofValid[i] = false;
+    tofMm[i]    = 0;
+  }
 
   // Health tracks the BUS, not the target. A sensor that answers is alive even
   // when it reports "nothing in range" — which is the NORMAL state for every

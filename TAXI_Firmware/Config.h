@@ -126,6 +126,19 @@
 #define TOF_INVALID_CM     0xFF     // sentinel returned by cm sensors on timeout
 #define TOF_INVALID_MM     0xFFF    // sentinel returned by the mm sensor (id 3)
 
+// ----- phantom filter -------------------------------------------------------
+// The M60F black-target return is weak (signal ~4-15 at 200-300 mm), the same
+// magnitude as the sensor's own crosstalk/ambient noise. No register setting
+// separates them (B5, B8 and B2 were all swept and all kill black at the same
+// point they kill the phantoms). The phantoms ARE filterable in time, though:
+// a real target reads valid on consecutive polls, a phantom is a stray frame.
+//
+// A sensor's reading is only published to tofValid[]/tofMm[] after this many
+// CONSECUTIVE valid reads. 3 was chosen from the bench data: black reads ~96%
+// valid at 200 mm (0.96^3 = 88% still detected) while empty-space phantoms read
+// ~7-13% valid (0.13^3 = 0.2% false positives). Set to 1 to disable the filter.
+#define TOF_CONSECUTIVE_VALID  3
+
 // ============================================================================
 // LINE SENSORS (QRE1113)
 // ============================================================================
