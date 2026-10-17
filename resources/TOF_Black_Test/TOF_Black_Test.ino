@@ -310,6 +310,54 @@ static void runGrid(uint16_t dist) {
   Serial.println(F("=== grid done ==="));
 }
 
+// ---- B2 crosstalk sweep at a fixed distance (black target) ------------------
+// Sweeps B2 (crosstalk correction) finely while the BLACK target sits at a
+// fixed distance, saved+restarted so each value takes effect. The point is to
+// find whether ANY B2 keeps the black target alive while trimming phantoms.
+// Watch 'valid' (want high) and 'sigAvg' (the black return).
+static const uint16_t B2_SWEEP[] = { 0, 10, 20, 30, 40, 50, 75, 100, 150, 200 };
+#define B2_REPS      5
+#define B2_SAMPLE_MS 400
+
+static void runB2(uint16_t dist) {
+  uint16_t b0 = rd(0xB0), b4 = rd(0xB4), b5 = rd(0xB5), b6 = rd(0xB6);
+  uint16_t o2 = rd(0xB2);
+  Serial.println();
+  Serial.print(F("=== B2 CROSSTALK SWEEP @ ")); Serial.print(dist); Serial.println(F(" mm black ==="));
+  Serial.println(F("Put the BLACK plate at that distance, perpendicular."));
+  Serial.print(F("B2 = ")); Serial.print(sizeof(B2_SWEEP)/2);
+  Serial.print(F(" values, ")); Serial.print(B2_REPS);
+  Serial.print(F(" reps x ")); Serial.print(B2_SAMPLE_MS);
+  Serial.print(F(" ms, B0=")); Serial.print(b0);
+  Serial.print(F(" B4=")); Serial.print(b4);
+  Serial.print(F(" B5=")); Serial.print(b5);
+  Serial.print(F(" B6=")); Serial.println(b6);
+  Serial.println(F("D,dist,b2,reps,samples,ans,valid,validPct,sigMin,sigAvg,sigMax,sigmaAvg,ambAvg,dAvg,dMin,dMax,dStd,status"));
+
+  for (uint8_t i = 0; i < sizeof(B2_SWEEP)/2; i++) {
+    uint16_t b2 = B2_SWEEP[i];
+    sensor.writeRegister(0xB2, b2);
+    sensor.saveConfiguration();
+    sensor.restartSensor();
+    delay(400);
+    Acc acc; accReset(acc);
+    for (uint8_t r = 0; r < B2_REPS; r++) {
+      Stats st; sample(B2_SAMPLE_MS, st); accAdd(acc, st);
+    }
+    Serial.print(F("D,")); Serial.print(dist);
+    Serial.print(','); Serial.print(b2);
+    Serial.print(',');
+    accBody(acc);
+  }
+
+  sensor.writeRegister(0xB2, o2);
+  sensor.saveConfiguration();
+  sensor.restartSensor();
+  delay(400);
+  Serial.print(F("  (restored B2=")); Serial.print(o2); Serial.println(')');
+  Serial.println(F("=== B2 sweep done ==="));
+}
+
 static void runVerify(uint16_t dist) {
   Serial.println();
   Serial.print(F("=== VERIFY current config @ ")); Serial.print(dist); Serial.println(F(" mm black ==="));
@@ -328,7 +376,7 @@ static void runVerify(uint16_t dist) {
 // NOISE_REPS samples per config. Point the sensor at >1.5 m of EMPTY SPACE
 // first (no target). A config is safe only if valid == 0 across every rep.
 static const uint16_t NOISE_B4[] = { 248, 254 };
-static const uint16_t NOISE_B5[] = { 0, 20, 25, 30, 35, 40, 45, 50, 60 };
+static const uint16_t NOISE_B5[] = { 0, 5, 10, 15, 20, 25, 30, 40, 60 };
 #define NOISE_REPS      10
 #define NOISE_SAMPLE_MS 400
 
@@ -366,27 +414,85 @@ static void runNoise() {
   Serial.println(F("=== noise sweep done ==="));
 }
 
+// ---- B1/B2 correction sweep (empty space) ----------------------------------
+// Sweeps B1 (offset) x B2 (crosstalk) at the CURRENT B0/B4/B5/B6, saved and
+// restarted so each value actually takes effect. Point at >1.5 m of EMPTY SPACE.
+// Crosstalk (B2) cancels internal reflection from the sensor window, a known
+// phantom source; offset (B1) shifts the reported distance. Watch 'valid': a
+// value that drops it toward 0 is cancelling the phantoms.
+static const uint16_t CORR_B1[] = { 0, 100, 300, 600 };
+static const uint16_t CORR_B2[] = { 0, 50, 100, 200, 400 };
+#define CORR_REPS      6
+#define CORR_SAMPLE_MS 400
+
+static void runCorr() {
+  uint16_t b0 = rd(0xB0), b4 = rd(0xB4), b5 = rd(0xB5), b6 = rd(0xB6);
+  uint16_t o1 = rd(0xB1), o2 = rd(0xB2);
+  Serial.println();
+  Serial.println(F("=== B1/B2 CORRECTION SWEEP (empty space) ==="));
+  Serial.println(F("Point the sensor at >1.5 m of empty space (no target)."));
+  Serial.print(F("B1 x B2 = "));
+  Serial.print(sizeof(CORR_B1)/2); Serial.print('x');
+  Serial.print(sizeof(CORR_B2)/2);
+  Serial.print(F(" combos, ")); Serial.print(CORR_REPS);
+  Serial.print(F(" reps x ")); Serial.print(CORR_SAMPLE_MS);
+  Serial.print(F(" ms, B0=")); Serial.print(b0);
+  Serial.print(F(" B4=")); Serial.print(b4);
+  Serial.print(F(" B5=")); Serial.print(b5);
+  Serial.print(F(" B6=")); Serial.println(b6);
+  Serial.println(F("C,b1,b2,reps,samples,ans,valid,validPct,sigMin,sigAvg,sigMax,sigmaAvg,ambAvg,dAvg,dMin,dMax,dStd,status"));
+
+  for (uint8_t i = 0; i < sizeof(CORR_B1)/2; i++)
+  for (uint8_t j = 0; j < sizeof(CORR_B2)/2; j++) {
+    uint16_t b1 = CORR_B1[i], b2 = CORR_B2[j];
+    sensor.writeRegister(0xB1, b1);
+    sensor.writeRegister(0xB2, b2);
+    sensor.saveConfiguration();
+    sensor.restartSensor();
+    delay(400);
+    Acc acc; accReset(acc);
+    for (uint8_t r = 0; r < CORR_REPS; r++) {
+      Stats st; sample(CORR_SAMPLE_MS, st); accAdd(acc, st);
+    }
+    Serial.print(F("C,")); Serial.print(b1);
+    Serial.print(','); Serial.print(b2);
+    Serial.print(',');
+    accBody(acc);
+  }
+
+  sensor.writeRegister(0xB1, o1);
+  sensor.writeRegister(0xB2, o2);
+  sensor.saveConfiguration();
+  sensor.restartSensor();
+  delay(400);
+  Serial.print(F("  (restored B1=")); Serial.print(o1);
+  Serial.print(F(" B2=")); Serial.print(o2); Serial.println(')');
+  Serial.println(F("=== correction sweep done ==="));
+}
+
 // ---- apply the winning config to all five sensors --------------------------
 // Values come from TofConfig.h. Writes each register, reads it back, saves and
 // restarts, ONE SENSOR AT A TIME, with delays so the shared bus settles between
 // steps. Prints a per-register ok/BAD and a per-sensor verdict.
 static void applyToAll() {
-  static const uint8_t  REGS[4] = { 0xB0, 0xB4, 0xB5, 0xB6 };
-  static const uint16_t VALS[4] = { TOF_CFG_B0, TOF_CFG_B4, TOF_CFG_B5, TOF_CFG_B6 };
+  static const uint8_t  REGS[6] = { 0xB0, 0xB2, 0xB4, 0xB5, 0xB6, 0xB8 };
+  static const uint16_t VALS[6] = { TOF_CFG_B0, TOF_CFG_B2, TOF_CFG_B4, TOF_CFG_B5, TOF_CFG_B6, TOF_CFG_B8 };
 
   Serial.println();
   Serial.println(F("=== APPLY WINNING CONFIG TO ALL 5 SENSORS ==="));
   Serial.print(F("B0=")); Serial.print(TOF_CFG_B0);
+  Serial.print(F(" B2=")); Serial.print(TOF_CFG_B2);
   Serial.print(F(" B4=")); Serial.print(TOF_CFG_B4);
   Serial.print(F(" B5=")); Serial.print(TOF_CFG_B5);
-  Serial.print(F(" B6=")); Serial.println(TOF_CFG_B6);
+  Serial.print(F(" B6=")); Serial.print(TOF_CFG_B6);
+  Serial.print(F(" B8=")); Serial.println(TOF_CFG_B8);
 
   bool allOk = true;
   for (uint8_t id = 1; id <= 5; id++) {
     DistanceSensor& s = allSensors[id - 1];
     Serial.print(F("id ")); Serial.print(id); Serial.print(F(": "));
     bool ok = true;
-    for (uint8_t k = 0; k < 4; k++) {
+    for (uint8_t k = 0; k < 6; k++) {
       bool w = s.writeRegister(REGS[k], VALS[k]);
       delay(20);
       uint16_t rb = 0;
@@ -500,6 +606,8 @@ static void printHelp() {
   Serial.println(F(" g <dist>     GRID: all B0 x B5 x B6 combos at <dist> mm, averaged"));
   Serial.println(F(" v <dist>     VERIFY current config at <dist> mm, averaged"));
   Serial.println(F(" n            EMPTY-SPACE noise sweep: B4 x B5, 10 reps each"));
+  Serial.println(F(" C            B1/B2 correction sweep on empty space (offset x crosstalk)"));
+  Serial.println(F(" D <dist>     B2 crosstalk sweep at <dist> mm with the BLACK target"));
   Serial.println(F(" A            APPLY TofConfig.h values to ALL 5 sensors (verify+save)"));
   Serial.println(F("--------------------------------------"));
 }
@@ -519,7 +627,7 @@ static void handleLine(char* s) {
   switch (verb) {
     case 'h': case 'H': case '?': printHelp(); break;
 
-    case 'c': case 'C': printConfig(); break;
+    case 'c': printConfig(); break;
 
     case 's': case 'S': {
       if (verb == 'S') {
@@ -568,6 +676,14 @@ static void handleLine(char* s) {
     }
 
     case 'n': case 'N': runNoise(); break;
+
+    case 'C': runCorr(); break;
+
+    case 'D': {
+      uint16_t dist = *s ? (uint16_t)strtol(s, NULL, 10) : 300;
+      runB2(dist);
+      break;
+    }
 
     case 'a': case 'A': applyToAll(); break;
 
