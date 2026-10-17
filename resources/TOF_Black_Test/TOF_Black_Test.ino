@@ -167,6 +167,67 @@ static void sample(uint16_t windowMs, Stats& st) {
   }
 }
 
+// ---- raw per-read capture (for the host-side filter simulator) -------------
+// Reads the sensor as fast as the bus allows and prints ONE VALUE per read:
+//   the distance in mm when the read is valid, or -1 when it is not.
+// One line per read, wrapped in RAW-BEGIN / RAW-END. The point is to see not
+// just HOW LONG the phantom bursts are but WHAT DISTANCE they report: if the
+// phantoms cluster at one distance and the target sits elsewhere, a distance
+// window separates them and no time filter is needed.
+//
+// Usage: point at empty space, send 'X <id> <ms>' (default id 3, 20000 ms).
+// 'Y <ms>' captures all five sensors in sequence with NO headers, so the whole
+// output can be pasted straight into a file for the host simulator. Paste the
+// blocks back; the simulator replays them through the firmware filter logic.
+//
+// The valid window matches TAXI_Firmware/Config.h (TOF_MIN_VALID_MM..
+// TOF_MAX_VALID_MM) so the capture reflects what the firmware would accept.
+#define RAW_MIN_VALID_MM 9
+#define RAW_MAX_VALID_MM 800
+
+static void rawOne(DistanceSensor& s, uint8_t id, uint16_t ms, bool quiet) {
+  if (!quiet) {
+    Serial.println();
+    Serial.print(F("=== RAW CAPTURE id ")); Serial.print(id);
+    Serial.print(F(" @ ")); Serial.print(rd(0xB0));
+    Serial.print(F(" ms sampling, ")); Serial.print(ms); Serial.println(F(" ms ==="));
+    Serial.println(F("One line per read: distance mm, or -1 if invalid."));
+  }
+  Serial.print(F("RAW-BEGIN ")); Serial.println(id);
+
+  uint32_t t0 = millis();
+  uint16_t n = 0, valid = 0;
+  while (millis() - t0 < ms) {
+    uint16_t raw = 0, status = 0;
+    bool ok = s.readRegister(0x01, &raw) && s.readRegister(0x00, &status);
+    bool v = ok && (status & 0x01) && raw != 0xFFF &&
+             raw >= RAW_MIN_VALID_MM && raw <= RAW_MAX_VALID_MM;
+    if (v) { Serial.println(raw); valid++; }
+    else   { Serial.println(F("-1")); }
+    n++;
+  }
+  Serial.println(F("RAW-END"));
+  if (!quiet) {
+    Serial.print(F("# id=")); Serial.print(id);
+    Serial.print(F(" reads=")); Serial.print(n);
+    Serial.print(F(" valid=")); Serial.print(valid);
+    Serial.print(F(" pct=")); Serial.println(n ? (uint32_t)valid * 100 / n : 0);
+    Serial.println(F("=== raw capture done ==="));
+  }
+}
+
+static void runRaw(uint8_t id, uint16_t ms) {
+  if (id < 1 || id > 5) { Serial.println(F("ERR: id 1..5")); return; }
+  rawOne(allSensors[id - 1], id, ms, false);
+}
+
+static void runRawAll(uint16_t ms) {
+  for (uint8_t id = 1; id <= 5; id++) {
+    rawOne(allSensors[id - 1], id, ms, true);
+    delay(200);
+  }
+}
+
 static void printStats(const Stats& st) {
   uint32_t sigAvg  = st.ans   ? st.sigSum   / st.ans   : 0;
   uint32_t sgmAvg  = st.ans   ? st.sigmaSum / st.ans   : 0;
@@ -608,6 +669,8 @@ static void printHelp() {
   Serial.println(F(" n            EMPTY-SPACE noise sweep: B4 x B5, 10 reps each"));
   Serial.println(F(" C            B1/B2 correction sweep on empty space (offset x crosstalk)"));
   Serial.println(F(" D <dist>     B2 crosstalk sweep at <dist> mm with the BLACK target"));
+  Serial.println(F(" X <id> [ms]  RAW per-read capture from sensor <id> (default 3)"));
+  Serial.println(F(" Y [ms]       RAW capture from ALL five sensors in sequence"));
   Serial.println(F(" A            APPLY TofConfig.h values to ALL 5 sensors (verify+save)"));
   Serial.println(F("--------------------------------------"));
 }
@@ -682,6 +745,29 @@ static void handleLine(char* s) {
     case 'D': {
       uint16_t dist = *s ? (uint16_t)strtol(s, NULL, 10) : 300;
       runB2(dist);
+      break;
+    }
+
+    case 'X': {
+      // 'X <id> [ms]' — capture from one sensor (default id 3).
+      uint8_t id = 3;
+      uint16_t ms = 20000;
+      if (*s) {
+        id = (uint8_t)strtol(s, NULL, 10);
+        while (*s && *s != ' ') s++;
+        while (*s == ' ') s++;
+        if (*s) ms = (uint16_t)strtol(s, NULL, 10);
+      }
+      runRaw(id, ms);
+      break;
+    }
+
+    case 'Y': {
+      // 'Y [ms]' — capture from ALL five sensors in sequence. Separate verb
+      // because the dispatcher strips the verb token before we see it, so
+      // 'XALL' cannot be told apart from 'X' here.
+      uint16_t ms = *s ? (uint16_t)strtol(s, NULL, 10) : 20000;
+      runRawAll(ms);
       break;
     }
 
