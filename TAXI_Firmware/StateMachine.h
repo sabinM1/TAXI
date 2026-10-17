@@ -36,7 +36,7 @@
 #include "Sensors.h"
 #include "Strategies.h"
 
-enum RobotState : uint8_t { ST_IDLE, ST_TACTIC, ST_SEARCH, ST_ATTACK, ST_BACKOFF, ST_EVADE, ST_STOP };
+enum RobotState : uint8_t { ST_IDLE, ST_TACTIC, ST_TACTIC_DONE, ST_SEARCH, ST_ATTACK, ST_BACKOFF, ST_EVADE, ST_STOP };
 static RobotState state = ST_IDLE;
 
 // Start/stop signal latch. The NanoLabs module holds its state in
@@ -92,6 +92,7 @@ static const char* stateName(RobotState s) {
   switch (s) {
     case ST_IDLE:   return "IDLE";
     case ST_TACTIC: return "TACTIC";
+    case ST_TACTIC_DONE: return "TACDONE";
     case ST_SEARCH: return "SEARCH";
     case ST_ATTACK: return "ATTACK";
     case ST_BACKOFF: return "BACKOFF";
@@ -529,18 +530,28 @@ void stateMachineUpdate() {
   // Global stop, checked before every other rule in this function. The wake-up
   // case (state == ST_IDLE) is excluded so the pre-match state does not jump
   // straight to STOP; ST_STOP is excluded because it re-runs motorsStop() in
-  // its own state body anyway.
-  if (!isStarted() && state != ST_IDLE && state != ST_STOP) {
+  // its own state body anyway. ST_TACTIC_DONE is excluded too: in strategy-test
+  // mode it holds after the opening and uses the start signal to re-arm, so it
+  // must not be latched into the terminal STOP state.
+  if (!isStarted() && state != ST_IDLE && state != ST_STOP
+#if STRATEGY_TEST
+      && state != ST_TACTIC_DONE
+#endif
+      ) {
     gotoState(ST_STOP); motorsStop();
     return;
   }
 
-  // EVADE override: any edge while fighting (including the opening tactic)
+  // EVADE override: any edge while fighting (including the opening tactic).
+  // Disabled in strategy-test mode: the line sensors are ignored there so a
+  // single opening can be measured without the border interfering.
+#if !STRATEGY_TEST
   if (sensorsAnyEdge() && state != ST_EVADE &&
       state != ST_IDLE && state != ST_STOP) {
     evadeBegin(sensorsEdgeIndex());
     gotoState(ST_EVADE);
   }
+#endif
 
   // Side-sensor backoff. An opponent alongside the robot (a SIDE ToF at contact
   // range) cannot be acted on by the front sensors, so reverse hard to open the
@@ -554,6 +565,9 @@ void stateMachineUpdate() {
   uint32_t sideHeldMs = sideCloseHeldMs();
   if (state != ST_BACKOFF && state != ST_EVADE &&
       state != ST_IDLE && state != ST_STOP &&
+#if STRATEGY_TEST
+      state != ST_TACTIC_DONE &&
+#endif
       sideHeldMs >= SIDE_BACKOFF_CONFIRM_MS &&
       (uint32_t)(millis() - backoffStart) >= SIDE_BACKOFF_MS + SIDE_BACKOFF_COOLDOWN_MS) {
     backoffStart    = millis();
@@ -585,6 +599,23 @@ void stateMachineUpdate() {
       break;
 
     case ST_TACTIC:
+#if STRATEGY_TEST
+      // Strategy test: run the opening open-loop, then stop and hold. No ToF
+      // handoff, no SEARCH — the move is measured on its own. The line-edge
+      // override above still runs, so the robot cannot drive off the dohyo.
+      if (tacticRun()) {
+        motorsStop();
+        gotoState(ST_TACTIC_DONE);
+      }
+      break;
+
+    case ST_TACTIC_DONE:
+      // Strategy test: the opening has finished. Stop and STAY stopped — no
+      // re-arm, no re-run. The only way out is a power cycle (or a reflash),
+      // which keeps a bench run from accidentally repeating the move.
+      motorsStop();
+      break;
+#else
       // The opening runs to completion, with ONE exception besides the line-edge
       // override above: once handoffMs (65% of the opening, baked in by the
       // designer) has elapsed, a close opponent outranks the committed move. The
@@ -609,6 +640,7 @@ void stateMachineUpdate() {
         enterSearch();
       }
       break;
+#endif
 
     case ST_SEARCH: {
       // The RAW reading, at any range: a visible opponent must be chased, so this

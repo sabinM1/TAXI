@@ -45,9 +45,9 @@
 #define PIN_LINE_L   A5     // QRE1113 line sensor, LEFT
 #define PIN_LINE_R   A1     // QRE1113 line sensor, RIGHT
 #define PIN_LINE_B   A4     // QRE1113 line sensor, REAR
-#define PIN_DIP1     5      // strategy bit 0 (LSB); switch ON = bit set
+#define PIN_DIP1     5      // strategy bit 2 (MSB); switch ON = bit set
 #define PIN_DIP2     6      // strategy bit 1
-#define PIN_DIP3     7      // strategy bit 2 (MSB)
+#define PIN_DIP3     7      // strategy bit 0 (LSB)
 #define PIN_LED1     8      // onboard user LED 1 (currently unused at runtime)
 #define PIN_LED2     9      // onboard user LED 2 (currently unused at runtime)
 #define PIN_TRIMPOT  A3     // onboard trimpot — RESERVED, deliberately not read
@@ -169,6 +169,21 @@
 // ============================================================================
 
 #define SERIAL_DEBUG      true   // boot/strategy messages (cheap, few lines)
+
+// ----- strategy test mode ---------------------------------------------------
+// Run ONLY the opening tactic, then stop. After the DIP-selected opening
+// finishes, the robot halts and holds instead of handing off to SEARCH, so a
+// single opening can be watched in isolation (does it end up where the designer
+// says? does it clear the border? how far does it travel?).
+//
+// The line-edge override is DISABLED in this mode, so the robot will not evade
+// the border — the line sensors are ignored entirely. The ToF handoff inside the
+// opening is also disabled: the opening runs fully open-loop for its whole
+// duration, which is what you want when measuring the move itself.
+//
+// When the opening finishes the robot stops and STAYS stopped; the only way out
+// is a power cycle. Set false for normal combat.
+#define STRATEGY_TEST     false
 // Full telemetry mode: state transitions + a 400 ms status table with sensors,
 // bearing, motors, edge flags and loop timing. Also the switch that keeps the
 // ring telemetry alive during a fight, and the one that arms the watchdog.
