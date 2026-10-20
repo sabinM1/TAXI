@@ -47,11 +47,17 @@
 // B5 and still pass) — trust the valid bit.
 #define TOF_CFG_B5  30
 
-// Sigma threshold (reg 0xB6), millimetres. Must be high: the black return is
-// noisy (sigma ~220-330 mm), so a low value rejects the target itself. The 'Z'
-// sweep showed 100 is cleaner on empty space, but that is below the black
-// return's own noise, so 300 stays.
-#define TOF_CFG_B6  300
+// Sigma threshold (reg 0xB6), millimetres. Lower = stricter.
+//
+// The 'Z' sweep on the BLACK target is what picks this. Grouping by B6:
+//   100 -> black valid 64-80%, runs 4-16   (too strict, the target flickers)
+//   200 -> black valid 89-100%, longest 24-62  (sustained runs)
+//   300 -> black valid 91-100%, longest 19-56  (good, but more flicker)
+// 200 gives the most SUSTAINED detection, which is what the N=3 filter needs:
+// at 254/30/200 the target reads 100% valid as ONE 56-long run (ev3 = 1),
+// while at 254/30/300 it breaks into 4 separate sightings (ev3 = 4).
+// 200 is also clean on empty space (0 valid measurements at 254/30/200).
+#define TOF_CFG_B6  200
 
 // Max distance (reg 0xB8), millimetres. The empty-space phantoms are LONG
 // readings (600-800 mm), so this is the surgical fix: anything past 500 mm is
