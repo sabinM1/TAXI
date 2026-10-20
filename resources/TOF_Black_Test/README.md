@@ -128,7 +128,7 @@ Default sweep: `B4` = {248, 254}, `B5` = {0, 20, 25, 30, 35, 40, 45, 50, 60}.
 > Note: the signal threshold does **not** compare against register `0x02`. A row
 > can show `sigMax` below `B5` yet still pass — trust `valid`, not `sigMax`.
 
-### 7. Stability sweep — send `Z [tag]`
+### 7. Stability sweep — send `Z [tag] [id]`
 
 The averaged sweeps (`g`, `v`, `n`) answer *"how many reads were valid"*. They
 **cannot** answer the question that actually matters for the phantom problem:
@@ -168,19 +168,56 @@ sightings the firmware's `TOF_CONSECUTIVE_VALID=3` filter would let through".
 
 - **Empty space** → `Z empty`. Want `validPct` low **and** `ev3 == 0`.
 - **Black plate** → `Z black`. Want `validPct` high **and** `longest` large.
+- **Another sensor** → `Z empty 4` (tag then id), or just `Z 4`.
 
 A config that is clean on empty space *and* sustained on black is the winner.
 The `#   runs:` and `#   dist:` lines below each row give the full histograms
 when you need to see the shape rather than the summary.
 
-Default sweep: `B4` = {248, 254}, `B5` = {0, 10, 20, 30, 40}, `B6` = {100, 300}
-= 20 combos × 1200 raw reads each. About **40 s** per run.
+Default sweep: `B4` = {248, 254}, `B5` = {0, 10, 20, 30, 40}, `B6` = {100, 200,
+300} = 30 combos × 1200 raw reads each. About **1 minute** per run.
 
-### 8. Paste everything back
+### 8. Other empty-space tests (no target needed)
+
+These all run with the sensor pointed at **>1.5 m of empty space**. They answer
+the questions the `Z` sweep cannot.
+
+**`P` — per-sensor phantom survey.** Runs the *current* config on all five
+sensors and reports the burst analysis for each:
+
+```
+P,id,meas,validPct,runs,longest,ev1,ev3,ev5,ev10,dMin,dMax,dMean
+```
+
+A sensor with a high `validPct` here is **inherently noisy** — it will produce
+phantoms no matter what the shared config is, and is the one to clean or
+replace. This is how you tell a bad sensor from a bad config.
+
+**`M` — min-distance (`B7`) sweep.** Sweeps the sensor's own minimum-distance
+window. Phantoms that sit at short range (the 0–50 mm cluster in the
+histograms) are killed by a floor without touching the signal threshold — a
+surgical lever the `B5`/`B6` sweeps cannot reach.
+
+```
+M,b7,meas,validPct,runs,longest,ev1,ev3,ev5,ev10,dMin,dMax,dMean
+```
+
+**`B` — sampling-time (`B0`) sweep.** Longer integration collects more photons,
+which helps the black target but also gives ambient noise more time to trip the
+validity checks. If a **short** `B0` is clean here *and* still sees black, it is
+strictly better: fresher readings and fewer phantoms.
+
+```
+B,b0,meas,validPct,runs,longest,ev1,ev3,ev5,ev10,dMin,dMax,dMean
+```
+
+All three restore the swept register when they finish.
+
+### 10. Paste everything back
 
 `c`, `s`, the `g` rows, the `v` rows, and the `n` rows.
 
-### 9. Apply the winner to all five sensors — send `A`
+### 11. Apply the winner to all five sensors — send `A`
 
 Edit `TofConfig.h` (same folder) to hold the winning values, then send `A`. It
 writes each register to **all five sensors one at a time**, reads every write
@@ -237,7 +274,10 @@ centred on the true distance.**
 | `g <dist>` | **grid**: all `B0 × B5 × B6` combos at `<dist>` mm, averaged |
 | `v <dist>` | **verify**: current config at `<dist>` mm, averaged |
 | `n` | **empty-space noise sweep**: `B4 × B5`, 10 reps each |
-| `Z [tag]` | **stability sweep**: `B4 × B5 × B6`, raw burst/flicker analysis |
+| `Z [tag] [id]` | **stability sweep**: `B4 × B5 × B6`, raw burst/flicker analysis |
+| `P` | **per-sensor phantom survey**: current config, all 5 sensors |
+| `M` | **min-distance (`B7`) sweep** on empty space |
+| `B` | **sampling-time (`B0`) sweep** on empty space |
 | `A` | **apply** `TofConfig.h` values to all 5 sensors (verify + save) |
 
 Note: `w` takes the **register in hex** (`B4`) and the **value in decimal or
