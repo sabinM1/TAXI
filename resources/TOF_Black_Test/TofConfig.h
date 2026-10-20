@@ -39,23 +39,22 @@
 // so this must stay LOW or the target itself is rejected — but not so low that
 // ambient noise passes.
 //
-// 30 is where the four empty-space runs put the floor. Across 4 runs of ~26
-// measurements each, 254/30/200 let through ONE phantom measurement total —
-// exactly the same as 254/40/300. Raising B5 to 40 therefore buys no extra
-// rejection while costing 6% of black detection (95.6% -> 89.6%), so 30 is the
-// better trade. The lone phantom is a single measurement, so the firmware's
-// N=3 filter still drops it.
+// 20 is the best trade the sweeps found. Across 10 empty-space runs of ~26
+// measurements each, 254/20/200 produced ZERO phantom measurements, and across
+// 8 black runs it held 98-100% valid (avg 99.25%). B5=30 at the same B6 is
+// worse on BOTH axes: 89-100% on black (avg 94%) and one phantom in 10 runs.
+// B5=40 is worse still (89.6% avg). So 20 is the floor that keeps the black
+// target solid without letting anything through.
 // NOTE: this is NOT compared against register 0x02 (a row can show sigMax below
 // B5 and still pass) — trust the valid bit.
-#define TOF_CFG_B5  30
+#define TOF_CFG_B5  20
 
 // Sigma threshold (reg 0xB6), millimetres. Lower = stricter.
 //
-// 200 pairs with B5=30 for the cleanest empty-space result of any config:
-// 254/30/200 let through one phantom measurement across four runs, and it
-// keeps the black target at 95.6% valid (min 91% over seven runs). B6=300 at
-// the same B5 leaks 4 phantoms; B6=100 is too strict and the black target
-// itself flickers (64-80%).
+// 200 pairs with B5=20 for the best result of any config tested: zero phantom
+// measurements across 10 empty-space runs, and 98-100% valid on the black
+// target across 8 runs. B6=300 at the same B5 leaks phantoms (2 in 10 runs) and
+// B6=100 is too strict, dropping black to 64-80%.
 #define TOF_CFG_B6  200
 
 // Max distance (reg 0xB8), millimetres. The empty-space phantoms are LONG
