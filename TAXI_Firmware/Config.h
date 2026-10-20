@@ -131,12 +131,19 @@
 // magnitude as the sensor's own crosstalk/ambient noise. No register setting
 // separates them (B5, B8 and B2 were all swept and all kill black at the same
 // point they kill the phantoms). The phantoms ARE filterable in time, though:
-// a real target reads valid on consecutive polls, a phantom is a stray frame.
+// a real target reads valid on consecutive measurements, a phantom is a stray
+// one.
 //
 // A sensor's reading is only published to tofValid[]/tofMm[] after this many
-// CONSECUTIVE valid reads. 3 was chosen from the bench data: black reads ~96%
-// valid at 200 mm (0.96^3 = 88% still detected) while empty-space phantoms read
-// ~7-13% valid (0.13^3 = 0.2% false positives). Set to 1 to disable the filter.
+// CONSECUTIVE valid MEASUREMENTS. 3 was chosen from the bench data: black reads
+// ~96% valid at 200 mm (0.96^3 = 88% still detected) while empty-space phantoms
+// read ~7-13% valid (0.13^3 = 0.2% false positives). Set to 1 to disable.
+//
+// NOTE: "measurements", not polls. The loop polls one sensor per iteration
+// (~1 ms) but the sensor only refreshes its result every B0 ms (50), so the
+// same measurement is re-read ~10 times. The streak in tofReadOne() only
+// advances when the raw value CHANGES, so a single phantom measurement counts
+// once instead of ten times. Without that guard this filter does almost nothing.
 #define TOF_CONSECUTIVE_VALID  3
 
 // ============================================================================

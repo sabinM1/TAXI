@@ -80,7 +80,16 @@ static uint8_t tofHealth[TOF_SENSOR_COUNT];
 
 // Consecutive-valid streak per sensor, for the phantom filter (see Config.h).
 // A reading is only published once the streak reaches TOF_CONSECUTIVE_VALID.
+//
+// IMPORTANT: the streak counts distinct MEASUREMENTS, not polls. The loop polls
+// one sensor per iteration (~1 ms) while the sensor only refreshes its result
+// every B0 ms (50). So a single phantom measurement is re-read ~10 times before
+// the next one arrives, and a poll-counting streak would see those 10 identical
+// reads as a "sustained" run and publish the phantom. tofLastRaw[] holds the
+// previous raw value per sensor so a repeat can be recognised and skipped.
 static uint8_t tofStreak[TOF_SENSOR_COUNT];
+static uint16_t tofLastRaw[TOF_SENSOR_COUNT];
+static bool tofHaveLast[TOF_SENSOR_COUNT];
 
 // Number of sensors currently considered alive. A sensor is "healthy" when
 // its health counter is at least half full — i.e. it has been answering
@@ -117,6 +126,7 @@ void sensorsInit() {
   for (uint8_t i = 0; i < TOF_SENSOR_COUNT; i++) {
     tofMm[i] = 0; tofValid[i] = false; tofHealth[i] = TOF_HEALTH_MAX;
     tofStreak[i] = 0;
+    tofLastRaw[i] = 0; tofHaveLast[i] = false;
   }
 }
 
@@ -155,17 +165,32 @@ static void tofReadOne() {
   tofMm[i]    = ok ? mm : 0;
 
   // Phantom filter: only publish a reading once the sensor has produced
-  // TOF_CONSECUTIVE_VALID valid reads in a row. A real target reads valid on
-  // consecutive polls; an empty-space phantom is a stray frame, so it never
-  // reaches the streak and is dropped. The streak is capped so it cannot wrap.
+  // TOF_CONSECUTIVE_VALID valid MEASUREMENTS in a row. A real target reads valid
+  // on consecutive measurements; an empty-space phantom is a stray measurement,
+  // so it never reaches the streak and is dropped. The streak is capped so it
+  // cannot wrap.
+  //
+  // The streak advances only when the RAW value CHANGES. The loop polls this
+  // sensor every ~1 ms but the sensor only refreshes its result every B0 ms, so
+  // without this guard one phantom measurement would be re-read ~10 times and
+  // counted as 10 consecutive valid reads — which is exactly how a single-frame
+  // phantom used to survive the filter. A repeat of the previous raw value is
+  // the SAME measurement, so it is skipped: the streak neither advances nor
+  // resets, it simply waits for the next real measurement.
   //
   // NOTE: this gates the PUBLISHED value, not the raw read. tofValid[]/tofMm[]
   // are what every consumer (sensorsOpponent, sensorsContact, ...) sees, so the
   // filter applies everywhere without touching those functions.
-  if (ok) {
-    if (tofStreak[i] < TOF_CONSECUTIVE_VALID) tofStreak[i]++;
-  } else {
-    tofStreak[i] = 0;
+  bool newMeasurement = !tofHaveLast[i] || (raw != tofLastRaw[i]);
+  tofLastRaw[i]  = raw;
+  tofHaveLast[i] = true;
+
+  if (newMeasurement) {
+    if (ok) {
+      if (tofStreak[i] < TOF_CONSECUTIVE_VALID) tofStreak[i]++;
+    } else {
+      tofStreak[i] = 0;
+    }
   }
   if (tofStreak[i] < TOF_CONSECUTIVE_VALID) {
     tofValid[i] = false;
