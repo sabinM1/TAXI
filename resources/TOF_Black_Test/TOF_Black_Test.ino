@@ -553,8 +553,10 @@ static void runCorr() {
 //
 // Point the sensor at EMPTY SPACE for the phantom test, or at the BLACK plate
 // for the detection test. The output is one CSV row per config:
-//   Z,tag,b4,b5,b6,reads,valid,validPct,runs,longest,ev1,ev3,ev5,ev10,dMin,dMax,dMean
-// where evN = phantom EVENTS surviving a consecutive-valid filter of N.
+//   Z,tag,b4,b5,b6,reads,meas,valid,validPct,runs,longest,ev1,ev3,ev5,ev10,dMin,dMax,dMean
+// where `meas` is the number of DISTINCT measurements (reads collapse to this),
+// validPct is the share of MEASUREMENTS that were valid, and evN = phantom
+// EVENTS surviving a consecutive-valid filter of N measurements.
 // A good empty-space config has validPct low AND ev3 == 0.
 // A good black-target config has validPct high AND longest large.
 
@@ -570,6 +572,13 @@ static void runCorr() {
 // storing 1200 reads (or even 1200 bits) is not affordable. The consecutive-
 // valid filter is evaluated for all N at once by keeping one streak counter
 // per N and one "published" flag per N.
+//
+// CRITICAL: the analysis counts distinct MEASUREMENTS, not polls. The bus is
+// polled far faster than the sensor refreshes (B0 ms), so the SAME measurement
+// is read ~27 times in a row. Counting those repeats as separate valid reads is
+// what made the old output useless: a single-measurement phantom looked like a
+// 27-long sustained run and survived every N. A repeat of the previous raw
+// value is recognised and skipped, exactly like the firmware's tofReadOne().
 static void stabConfig(DistanceSensor& s, const char* tag,
                        uint16_t b4, uint16_t b5, uint16_t b6) {
   uint16_t runHist[STAB_MAX_RUNS];
@@ -582,9 +591,10 @@ static void stabConfig(DistanceSensor& s, const char* tag,
   uint16_t ev[STAB_MAX_N + 1];       // per-N event count
   for (uint8_t n = 0; n <= STAB_MAX_N; n++) { streak[n] = 0; pub[n] = false; ev[n] = 0; }
 
-  uint16_t reads = 0, valid = 0;
+  uint16_t reads = 0, valid = 0, meas = 0, measValid = 0;
   uint16_t runs = 0, longest = 0, curRun = 0;
   uint32_t dSum = 0; uint16_t dMin = 0xFFFF, dMax = 0;
+  uint16_t lastRaw = 0; bool haveLast = false;
   uint32_t t0 = millis();
 
   while (reads < STAB_READS) {
@@ -594,8 +604,19 @@ static void stabConfig(DistanceSensor& s, const char* tag,
              raw >= RAW_MIN_VALID_MM && raw <= RAW_MAX_VALID_MM;
     reads++;
 
+    // Skip a repeat of the previous raw value: it is the SAME measurement, not
+    // a new one. This is the whole point of the routine.
+    bool newMeas = !haveLast || (raw != lastRaw);
+    lastRaw = raw; haveLast = true;
+    if (!newMeas) {
+      if (millis() - t0 > 8000) break;
+      continue;
+    }
+    meas++;
+
     if (v) {
       valid++;
+      measValid++;
       curRun++;
       dSum += raw;
       if (raw < dMin) dMin = raw;
@@ -613,7 +634,7 @@ static void stabConfig(DistanceSensor& s, const char* tag,
       }
     }
 
-    // Consecutive-valid filter, all N in one pass.
+    // Consecutive-valid filter, all N in one pass, over MEASUREMENTS.
     for (uint8_t n = 1; n <= STAB_MAX_N; n++) {
       if (v) { if (streak[n] < n) streak[n]++; }
       else streak[n] = 0;
@@ -640,8 +661,9 @@ static void stabConfig(DistanceSensor& s, const char* tag,
   Serial.print(','); Serial.print(b5);
   Serial.print(','); Serial.print(b6);
   Serial.print(','); Serial.print(reads);
+  Serial.print(','); Serial.print(meas);
   Serial.print(','); Serial.print(valid);
-  Serial.print(','); Serial.print(reads ? (uint32_t)valid * 100 / reads : 0);
+  Serial.print(','); Serial.print(meas ? (uint32_t)measValid * 100 / meas : 0);
   Serial.print(','); Serial.print(runs);
   Serial.print(','); Serial.print(longest);
   Serial.print(','); Serial.print(ev[1]);
@@ -684,7 +706,7 @@ static void runStab(const char* tag) {
   Serial.print(sizeof(STAB_B6)/2);
   Serial.print(F(" combos, ")); Serial.print(STAB_READS);
   Serial.println(F(" raw reads each"));
-  Serial.println(F("Z,tag,b4,b5,b6,reads,valid,validPct,runs,longest,ev1,ev3,ev5,ev10,dMin,dMax,dMean"));
+  Serial.println(F("Z,tag,b4,b5,b6,reads,meas,valid,validPct,runs,longest,ev1,ev3,ev5,ev10,dMin,dMax,dMean"));
 
   for (uint8_t i = 0; i < sizeof(STAB_B4)/2; i++)
   for (uint8_t j = 0; j < sizeof(STAB_B5)/2; j++)

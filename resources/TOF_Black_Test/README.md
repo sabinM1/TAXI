@@ -139,15 +139,25 @@ hundred single-frame blips, and those are completely different robots.
 `Z` captures the **raw per-read stream** and reports its structure:
 
 ```
-Z,tag,b4,b5,b6,reads,valid,validPct,runs,longest,ev1,ev3,ev5,ev10,dMin,dMax,dMean
+Z,tag,b4,b5,b6,reads,meas,valid,validPct,runs,longest,ev1,ev3,ev5,ev10,dMin,dMax,dMean
 ```
 
 | Column | Meaning |
 |---|---|
+| `reads` | raw bus reads (the sensor is polled far faster than it refreshes) |
+| `meas` | **distinct measurements** — repeats of the same raw value collapse |
+| `validPct` | share of **measurements** that were valid |
 | `runs` | number of valid bursts (fewer = less flicker) |
-| `longest` | longest single burst in reads (bigger = more sustained) |
+| `longest` | longest single burst in measurements (bigger = more sustained) |
 | `ev1`/`ev3`/`ev5`/`ev10` | **phantom events surviving** a consecutive-valid filter of N |
-| `dMin`/`dMax`/`dMean` | distance spread of the valid reads |
+| `dMin`/`dMax`/`dMean` | distance spread of the valid measurements |
+
+> **Why `meas` matters.** The bus is polled far faster than the sensor refreshes
+> (`B0` ms), so the *same* measurement is read ~27 times in a row. Counting those
+> repeats as separate valid reads makes a single-measurement phantom look like a
+> 27-long sustained run that survives every N. `Z` collapses repeats exactly like
+> the firmware's `tofReadOne()` does, so `ev3` is a true prediction of what the
+> robot will publish.
 
 `evN` is the number of times the published value would flip from nothing to a
 reading. A sustained burst of length `L` yields exactly **one** event for any
