@@ -128,7 +128,7 @@ Default sweep: `B4` = {248, 254}, `B5` = {0, 20, 25, 30, 35, 40, 45, 50, 60}.
 > Note: the signal threshold does **not** compare against register `0x02`. A row
 > can show `sigMax` below `B5` yet still pass — trust `valid`, not `sigMax`.
 
-### 7. Stability sweep — send `Z [tag] [id]`
+### 7. Stability sweep — send `Z [tag] [maxmm] [reps] [id]`
 
 The averaged sweeps (`g`, `v`, `n`) answer *"how many reads were valid"*. They
 **cannot** answer the question that actually matters for the phantom problem:
@@ -169,6 +169,30 @@ sightings the firmware's `TOF_CONSECUTIVE_VALID=3` filter would let through".
 - **Empty space** → `Z empty`. Want `validPct` low **and** `ev3 == 0`.
 - **Black plate** → `Z black`. Want `validPct` high **and** `longest` large.
 - **Another sensor** → `Z empty 4` (tag then id), or just `Z 4`.
+
+**Optional arguments.** After the tag you may add up to three numbers. They are
+classified by magnitude, so the order does not matter:
+
+| Value | Meaning |
+|---|---|
+| `>= 100` | **temporary `B8` max distance** (mm). Written before the sweep and **restored** when it ends — the saved config is untouched. Use it to test a tighter distance window on empty space without editing `TofConfig.h`. |
+| `6 .. 99` | **repeat count** — runs the whole sweep that many times back to back. |
+| `1 .. 5` | **sensor id** (default `3`). |
+
+```
+Z empty 500 6     # temporary B8=500 mm, repeat the sweep 6 times
+Z empty 500       # temporary B8=500 mm, one run
+Z black 10        # 10 runs, no B8 change
+Z empty 500 6 2   # B8=500, 6 runs, sensor 2
+Z 3               # sensor 3, one run (bare id still works)
+```
+
+Each repeat is separated by a `# --- rep N/M ---` comment line. The temporary
+`B8` is set once before the first repeat and restored after the last, so every
+repeat sees the same window.
+
+> Note: because `1..5` is reserved for the sensor id, a repeat count of 2–5 is
+> not expressible — use `6` or more, or just run the command again.
 
 A config that is clean on empty space *and* sustained on black is the winner.
 The `#   runs:` and `#   dist:` lines below each row give the full histograms
@@ -274,7 +298,7 @@ centred on the true distance.**
 | `g <dist>` | **grid**: all `B0 × B5 × B6` combos at `<dist>` mm, averaged |
 | `v <dist>` | **verify**: current config at `<dist>` mm, averaged |
 | `n` | **empty-space noise sweep**: `B4 × B5`, 10 reps each |
-| `Z [tag] [id]` | **stability sweep**: `B4 × B5 × B6`, raw burst/flicker analysis |
+| `Z [tag] [maxmm] [reps] [id]` | **stability sweep**: `B4 × B5 × B6`, raw burst/flicker analysis. `maxmm >= 100` = temporary `B8` (restored); `reps 6..99` = repeat; `id 1..5` = sensor |
 | `P` | **per-sensor phantom survey**: current config, all 5 sensors |
 | `M` | **min-distance (`B7`) sweep** on empty space |
 | `B` | **sampling-time (`B0`) sweep** on empty space |

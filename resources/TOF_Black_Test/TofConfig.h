@@ -58,10 +58,11 @@
 #define TOF_CFG_B6  200
 
 // Max distance (reg 0xB8), millimetres. The empty-space phantoms are LONG
-// readings (600-800 mm), so this is the surgical fix: anything past 500 mm is
+// readings (600-800 mm), so this is the surgical fix: anything past 700 mm is
 // rejected by the distance-max check without touching the signal threshold.
 // Used because bit 7 of B4 (0xFE = 254) enables the distance-max check.
-#define TOF_CFG_B8  500
+// Keep in sync with TOF_MAX_VALID_MM in TAXI_Firmware/Config.h.
+#define TOF_CFG_B8  700
 
 // Crosstalk correction (reg 0xB2). Left at 0: the sweep showed B2 does NOT
 // change the signal the sensor sees (sigAvg flat at 4-6 across 0..200), it only

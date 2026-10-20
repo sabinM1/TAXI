@@ -25,7 +25,10 @@
  *   g <dist>       GRID: every B0 x B5 x B6 combo at <dist> mm, averaged
  *   v <dist>       VERIFY: current config at <dist> mm, averaged
  *   n              EMPTY-SPACE noise sweep: B4 x B5, 10 reps each
- *   Z [tag] [id]   STABILITY sweep: B4 x B5 x B6, raw burst/flicker analysis
+ *   Z [tag] [maxmm] [reps] [id]  STABILITY sweep: B4 x B5 x B6, raw burst/
+ *                  flicker analysis. maxmm >= 100 sets a TEMPORARY B8 (max
+ *                  distance) that is restored when the sweep ends; reps 6..99
+ *                  repeats the whole sweep; id 1..5 picks the sensor.
  *   P              PER-SENSOR phantom survey: current config, all 5 sensors
  *   M              MIN-DISTANCE (B7) sweep on empty space
  *   B              SAMPLING-TIME (B0) sweep on empty space
@@ -51,7 +54,7 @@
 
 // Which sensor the 'n' empty-space noise sweep and the 'Z' stability sweep run
 // on. 3 = MID, the reference sensor for this tuning session.
-#define NOISE_SENSOR_ID 3
+#define NOISE_SENSOR_ID 4
 
 SingleWireSerial bus(false);
 DistanceSensor sensor(&bus, SENSOR_ID);
@@ -62,6 +65,12 @@ DistanceSensor allSensors[5] = {
   DistanceSensor(&bus, 3), DistanceSensor(&bus, 4),
   DistanceSensor(&bus, 5)
 };
+
+// The sensor the shared helpers (rd, sample) read from. Defaults to the id-3
+// sensor; the per-sensor sweeps point it at the sensor they operate on, so
+// their save/restore and measurement hit the right device instead of always
+// hitting sensor 3.
+DistanceSensor* gActive = &sensor;
 
 // ---- grid definition -------------------------------------------------------
 static const uint16_t GRID_B0[] = {25, 33, 40, 50};
@@ -115,7 +124,7 @@ static void hex2(uint8_t v) {
 
 static uint16_t rd(uint8_t reg) {
   uint16_t v = 0;
-  sensor.readRegister(reg, &v);
+  gActive->readRegister(reg, &v);
   return v;
 }
 
@@ -165,13 +174,13 @@ static void sample(uint16_t windowMs, Stats& st) {
   while (millis() - t0 < windowMs) {
     uint16_t raw = 0, sig = 0, amb = 0, sgm = 0, spad = 0, status = 0;
     st.samples++;
-    if (!sensor.readRegister(0x01, &raw)) continue;
+    if (!gActive->readRegister(0x01, &raw)) continue;
     st.ans++;
-    sensor.readRegister(0x02, &sig);
-    sensor.readRegister(0x03, &amb);
-    sensor.readRegister(0x04, &sgm);
-    sensor.readRegister(0x05, &spad);
-    sensor.readRegister(0x00, &status);
+    gActive->readRegister(0x02, &sig);
+    gActive->readRegister(0x03, &amb);
+    gActive->readRegister(0x04, &sgm);
+    gActive->readRegister(0x05, &spad);
+    gActive->readRegister(0x00, &status);
 
     if (sig < st.sigMin) st.sigMin = sig;
     if (sig > st.sigMax) st.sigMax = sig;
@@ -469,6 +478,7 @@ static const uint16_t NOISE_B5[] = { 0, 5, 10, 15, 20, 25, 30, 40, 60 };
 
 static void runNoise() {
   DistanceSensor& s = allSensors[NOISE_SENSOR_ID - 1];
+  gActive = &s;
   uint16_t b0 = rd(0xB0), b6 = rd(0xB6);
   Serial.println();
   Serial.println(F("=== EMPTY-SPACE NOISE FLOOR ==="));
@@ -501,6 +511,7 @@ static void runNoise() {
     accBody(acc);
   }
   Serial.println(F("=== noise sweep done ==="));
+  gActive = &sensor;
 }
 
 // ---- B1/B2 correction sweep (empty space) ----------------------------------
@@ -743,14 +754,23 @@ static const uint16_t STAB_B4[] = { 248, 254 };
 static const uint16_t STAB_B5[] = { 0, 10, 20, 30, 40 };
 static const uint16_t STAB_B6[] = { 100, 200, 300 };
 
-static void runStab(const char* tag, uint8_t id) {
+static void runStab(const char* tag, uint8_t id, uint16_t maxmm, uint8_t reps) {
   if (id < 1 || id > 5) { Serial.println(F("ERR: id 1..5")); return; }
+  if (reps == 0) reps = 1;
   DistanceSensor& s = allSensors[id - 1];
+  gActive = &s;
   uint16_t o4 = rd(0xB4), o5 = rd(0xB5), o6 = rd(0xB6);
+  uint16_t o8 = 0; s.readRegister(0xB8, &o8);
   Serial.println();
   Serial.println(F("=== STABILITY SWEEP (flicker / hysteresis) ==="));
   Serial.print(F("sensor id ")); Serial.println(id);
   Serial.print(F("tag=")); Serial.println(tag);
+  Serial.print(F("reps=")); Serial.println(reps);
+  if (maxmm) {
+    Serial.print(F("temporary B8 (max dist) = ")); Serial.print(maxmm);
+    Serial.print(F(" mm (was ")); Serial.print(o8);
+    Serial.println(F("), restored when the sweep ends"));
+  }
   Serial.print(F("B4 x B5 x B6 = "));
   Serial.print(sizeof(STAB_B4)/2); Serial.print('x');
   Serial.print(sizeof(STAB_B5)/2); Serial.print('x');
@@ -759,29 +779,48 @@ static void runStab(const char* tag, uint8_t id) {
   Serial.println(F(" raw reads each"));
   Serial.println(F("Z,tag,b4,b5,b6,reads,meas,valid,validPct,runs,longest,ev1,ev3,ev5,ev10,dMin,dMax,dMean"));
 
-  for (uint8_t i = 0; i < sizeof(STAB_B4)/2; i++)
-  for (uint8_t j = 0; j < sizeof(STAB_B5)/2; j++)
-  for (uint8_t k = 0; k < sizeof(STAB_B6)/2; k++) {
-    uint16_t b4 = STAB_B4[i], b5 = STAB_B5[j], b6 = STAB_B6[k];
-    s.writeRegister(0xB4, b4);
-    s.writeRegister(0xB5, b5);
-    s.writeRegister(0xB6, b6);
+  // Temporary max-distance override. Set once before the sweep: the per-combo
+  // save+restart below saves the WHOLE config, so B8 survives every combo.
+  if (maxmm) {
+    s.writeRegister(0xB8, maxmm);
     s.saveConfiguration();
     s.restartSensor();
     delay(400);
-    stabConfig(s, tag, b4, b5, b6);
+  }
+
+  for (uint8_t rep = 0; rep < reps; rep++) {
+    if (reps > 1) {
+      Serial.print(F("# --- rep ")); Serial.print(rep + 1);
+      Serial.print('/'); Serial.print(reps); Serial.println(F(" ---"));
+    }
+    for (uint8_t i = 0; i < sizeof(STAB_B4)/2; i++)
+    for (uint8_t j = 0; j < sizeof(STAB_B5)/2; j++)
+    for (uint8_t k = 0; k < sizeof(STAB_B6)/2; k++) {
+      uint16_t b4 = STAB_B4[i], b5 = STAB_B5[j], b6 = STAB_B6[k];
+      s.writeRegister(0xB4, b4);
+      s.writeRegister(0xB5, b5);
+      s.writeRegister(0xB6, b6);
+      s.saveConfiguration();
+      s.restartSensor();
+      delay(400);
+      stabConfig(s, tag, b4, b5, b6);
+    }
   }
 
   s.writeRegister(0xB4, o4);
   s.writeRegister(0xB5, o5);
   s.writeRegister(0xB6, o6);
+  if (maxmm) s.writeRegister(0xB8, o8);
   s.saveConfiguration();
   s.restartSensor();
   delay(400);
   Serial.print(F("  (restored B4=")); Serial.print(o4);
   Serial.print(F(" B5=")); Serial.print(o5);
-  Serial.print(F(" B6=")); Serial.print(o6); Serial.println(')');
+  Serial.print(F(" B6=")); Serial.print(o6);
+  if (maxmm) { Serial.print(F(" B8=")); Serial.print(o8); }
+  Serial.println(')');
   Serial.println(F("=== stability sweep done ==="));
+  gActive = &sensor;
 }
 
 // ---- per-sensor phantom survey ('P') ---------------------------------------
@@ -817,6 +856,7 @@ static const uint16_t MIN_SWEEP[] = { 0, 25, 50, 75, 100, 150, 200 };
 
 static void runMinSweep() {
   DistanceSensor& s = allSensors[NOISE_SENSOR_ID - 1];
+  gActive = &s;
   uint16_t o7 = rd(0xB7);
   uint16_t b4 = rd(0xB4), b5 = rd(0xB5), b6 = rd(0xB6);
   Serial.println();
@@ -845,6 +885,7 @@ static void runMinSweep() {
   delay(400);
   Serial.print(F("  (restored B7=")); Serial.print(o7); Serial.println(')');
   Serial.println(F("=== min-distance sweep done ==="));
+  gActive = &sensor;
 }
 
 // ---- sampling-time (B0) sweep ('B') ----------------------------------------
@@ -856,6 +897,7 @@ static const uint16_t B0_SWEEP[] = { 10, 15, 20, 25, 33, 40, 50 };
 
 static void runB0Sweep() {
   DistanceSensor& s = allSensors[NOISE_SENSOR_ID - 1];
+  gActive = &s;
   uint16_t o0 = rd(0xB0);
   uint16_t b4 = rd(0xB4), b5 = rd(0xB5), b6 = rd(0xB6);
   Serial.println();
@@ -884,6 +926,7 @@ static void runB0Sweep() {
   delay(400);
   Serial.print(F("  (restored B0=")); Serial.print(o0); Serial.println(')');
   Serial.println(F("=== sampling-time sweep done ==="));
+  gActive = &sensor;
 }
 
 // ---- apply the winning config to all five sensors --------------------------
@@ -1022,7 +1065,9 @@ static void printHelp() {
   Serial.println(F(" g <dist>     GRID: all B0 x B5 x B6 combos at <dist> mm, averaged"));
   Serial.println(F(" v <dist>     VERIFY current config at <dist> mm, averaged"));
   Serial.println(F(" n            EMPTY-SPACE noise sweep: B4 x B5, 10 reps each"));
-  Serial.println(F(" Z [tag] [id] STABILITY sweep: B4 x B5 x B6, raw burst analysis"));
+  Serial.println(F(" Z [tag] [maxmm] [reps] [id]  STABILITY sweep B4 x B5 x B6"));
+  Serial.println(F("              maxmm>=100: TEMP B8 max dist (restored) | reps 6..99"));
+  Serial.println(F("              id 1..5: sensor (default 3). 'Z empty 500 6' = 500mm, 6x"));
   Serial.println(F(" P            PER-SENSOR phantom survey: current config, all 5"));
   Serial.println(F(" M            MIN-DISTANCE (B7) sweep on empty space"));
   Serial.println(F(" B            SAMPLING-TIME (B0) sweep on empty space"));
@@ -1102,23 +1147,42 @@ static void handleLine(char* s) {
     case 'C': runCorr(); break;
 
     case 'Z': {
-      // 'Z [tag] [id]' — stability sweep. Tag defaults to 'empty'; the optional
-      // id (1..5) picks the sensor, default NOISE_SENSOR_ID. A bare number as
-      // the first token is taken as the id, so 'Z 3' and 'Z empty 3' both work.
+      // 'Z [tag] [maxmm] [reps] [id]' — stability sweep.
+      //   tag   : free-text label (default "empty")
+      //   maxmm : any value >= 100 -> TEMPORARY B8 (max distance), restored at
+      //           the end of the sweep. Lets you test a tighter distance window
+      //           on empty space without touching the saved config.
+      //   reps  : any value 6..99  -> repeat the whole sweep that many times
+      //   id    : any value 1..5   -> sensor (default NOISE_SENSOR_ID)
+      // A bare numeric first token is still the id, so 'Z 3' works as before.
+      // Values are classified by magnitude, so 'Z empty 500 6' = maxmm 500,
+      // 6 reps, and 'Z black 10' = 10 reps.
       char* tok = s;
       while (*s && *s != ' ') s++;
       if (*s) *s++ = '\0';
       while (*s == ' ') s++;
       const char* tag = "empty";
       uint8_t id = NOISE_SENSOR_ID;
+      uint16_t maxmm = 0;
+      uint8_t reps = 1;
       if (*tok) {
         bool numeric = true;
         for (char* p = tok; *p; p++) if (*p < '0' || *p > '9') { numeric = false; break; }
         if (numeric) id = (uint8_t)strtol(tok, NULL, 10);
         else tag = tok;
       }
-      if (*s) id = (uint8_t)strtol(s, NULL, 10);
-      runStab(tag, id);
+      while (*s) {
+        while (*s == ' ') s++;
+        if (!*s) break;
+        char* t = s;
+        while (*s && *s != ' ') s++;
+        if (*s) *s++ = '\0';
+        long v = strtol(t, NULL, 10);
+        if (v >= 100)             maxmm = (uint16_t)v;
+        else if (v >= 1 && v <= 5) id = (uint8_t)v;
+        else if (v >= 6)          reps = (uint8_t)v;
+      }
+      runStab(tag, id, maxmm, reps);
       break;
     }
 

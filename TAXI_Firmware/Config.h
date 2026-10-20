@@ -119,10 +119,13 @@
                                     // host just uses it to pick a port speed). The
                                     // real readout-rate knob is DEBUG_DUMP_MS.
 
-// Valid measurement window (sensor config: 9..800 mm). Anything outside
+// Valid measurement window (sensor config: 9..700 mm). Anything outside
 // (or the no-response sentinel) is treated as "invalid", not as distance.
+// Must match TOF_CFG_B8 (reg 0xB8) in resources/TOF_Black_Test/TofConfig.h:
+// the sensor's own distance-max check rejects anything past B8, so a larger
+// window here would only ever see values the sensor already refused.
 #define TOF_MIN_VALID_MM   9
-#define TOF_MAX_VALID_MM   800
+#define TOF_MAX_VALID_MM   700
 #define TOF_INVALID_CM     0xFF     // sentinel returned by cm sensors on timeout
 #define TOF_INVALID_MM     0xFFF    // sentinel returned by the mm sensor (id 3)
 
