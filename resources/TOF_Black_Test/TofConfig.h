@@ -5,11 +5,15 @@
 // Found with TOF_Black_Test (sensor 3, MID) against a MATTE BLACK opponent:
 //   * grid sweep of B0 x B5 x B6 at 300..500 mm
 //   * empty-space noise sweep of B4 x B5
+//   * stability sweep ('Z') of B4 x B5 x B6, which counts distinct
+//     MEASUREMENTS and reports the phantom events surviving the firmware's
+//     consecutive-valid filter (ev3)
 //
 // Verified with these values:
 //   empty space (>1.5 m) : valid = 0     -> no false positives
 //   black @ 200 mm       : valid = 100%  -> perfect detection
 //   black @ 300 mm       : valid = 96%   -> solid
+//   empty space, 'Z'     : ev3 = 0       -> nothing survives the N=3 filter
 //
 // Edit the values below, then send 'A' in TOF_Black_Test to push them to
 // all five sensors (write + verify + save + restart, one sensor at a time).
@@ -21,21 +25,32 @@
 // TOF_TIMEOUT_MS (55 in TAXI_Firmware/Config.h).
 #define TOF_CFG_B0  50
 
-// Range checks (reg 0xB4). 0xF8 = 248 leaves the wrap/phase pair (bits 1-2)
-// off. The empty-space B4 x B5 sweep on sensor 2 put 248 at the floor (1%
-// valid, 8/670) with tight spread (dStd 92, dMax 346), beating 254's 9%.
-#define TOF_CFG_B4  248
+// Range checks (reg 0xB4). 0xFE = 254 turns EVERY check on, including the
+// wrap/phase pair (bits 1-2) and the distance-max check (bit 7).
+//
+// This is the value the black target was actually verified against (100% at
+// 200 mm, 96% at 300 mm). An earlier session dropped it to 248 on the strength
+// of a sensor-2 empty-space sweep, but that disabled the wrap/phase checks and
+// was never re-verified against black. The 'Z' sweep now shows 254 is also the
+// cleaner of the two on empty space, so there is no reason to keep 248.
+#define TOF_CFG_B4  254
 
 // Signal threshold (reg 0xB5). The black return is weak (sigAvg ~4 at 300 mm),
-// so this must stay LOW or the target itself is rejected. 15 was the floor of
-// the empty-space B4 x B5 sweep on sensor 2 (1% valid, 8/670); higher values
-// did not improve on it.
+// so this must stay LOW or the target itself is rejected — but not so low that
+// ambient noise passes.
+//
+// 30 is the value the black target was verified against. The 'Z' sweep shows
+// every B5 >= 10 gives ev3 = 0 on empty space (the N=3 filter kills the
+// phantoms), so there is no phantom benefit to going lower; 30 keeps the
+// margin for the weak black return.
 // NOTE: this is NOT compared against register 0x02 (a row can show sigMax below
 // B5 and still pass) — trust the valid bit.
-#define TOF_CFG_B5  15
+#define TOF_CFG_B5  30
 
 // Sigma threshold (reg 0xB6), millimetres. Must be high: the black return is
-// noisy (sigma ~220-330 mm), so a low value rejects the target itself.
+// noisy (sigma ~220-330 mm), so a low value rejects the target itself. The 'Z'
+// sweep showed 100 is cleaner on empty space, but that is below the black
+// return's own noise, so 300 stays.
 #define TOF_CFG_B6  300
 
 // Max distance (reg 0xB8), millimetres. The empty-space phantoms are LONG
