@@ -128,11 +128,49 @@ Default sweep: `B4` = {248, 254}, `B5` = {0, 20, 25, 30, 35, 40, 45, 50, 60}.
 > Note: the signal threshold does **not** compare against register `0x02`. A row
 > can show `sigMax` below `B5` yet still pass — trust `valid`, not `sigMax`.
 
-### 7. Paste everything back
+### 7. Stability sweep — send `Z [tag]`
+
+The averaged sweeps (`g`, `v`, `n`) answer *"how many reads were valid"*. They
+**cannot** answer the question that actually matters for the phantom problem:
+are the valid reads a **sustained run** (a real target) or a **flicker** (a
+phantom)? A config can show `validPct = 20%` as either one solid burst or two
+hundred single-frame blips, and those are completely different robots.
+
+`Z` captures the **raw per-read stream** and reports its structure:
+
+```
+Z,tag,b4,b5,b6,reads,valid,validPct,runs,longest,ev1,ev3,ev5,ev10,dMin,dMax,dMean
+```
+
+| Column | Meaning |
+|---|---|
+| `runs` | number of valid bursts (fewer = less flicker) |
+| `longest` | longest single burst in reads (bigger = more sustained) |
+| `ev1`/`ev3`/`ev5`/`ev10` | **phantom events surviving** a consecutive-valid filter of N |
+| `dMin`/`dMax`/`dMean` | distance spread of the valid reads |
+
+`evN` is the number of times the published value would flip from nothing to a
+reading. A sustained burst of length `L` yields exactly **one** event for any
+`N <= L`, and **zero** for `N > L`. So `ev3` is literally "how many phantom
+sightings the firmware's `TOF_CONSECUTIVE_VALID=3` filter would let through".
+
+**How to use it:**
+
+- **Empty space** → `Z empty`. Want `validPct` low **and** `ev3 == 0`.
+- **Black plate** → `Z black`. Want `validPct` high **and** `longest` large.
+
+A config that is clean on empty space *and* sustained on black is the winner.
+The `#   runs:` and `#   dist:` lines below each row give the full histograms
+when you need to see the shape rather than the summary.
+
+Default sweep: `B4` = {248, 254}, `B5` = {0, 10, 20, 30, 40}, `B6` = {100, 300}
+= 20 combos × 1200 raw reads each. About **40 s** per run.
+
+### 8. Paste everything back
 
 `c`, `s`, the `g` rows, the `v` rows, and the `n` rows.
 
-### 8. Apply the winner to all five sensors — send `A`
+### 9. Apply the winner to all five sensors — send `A`
 
 Edit `TofConfig.h` (same folder) to hold the winning values, then send `A`. It
 writes each register to **all five sensors one at a time**, reads every write
@@ -189,6 +227,7 @@ centred on the true distance.**
 | `g <dist>` | **grid**: all `B0 × B5 × B6` combos at `<dist>` mm, averaged |
 | `v <dist>` | **verify**: current config at `<dist>` mm, averaged |
 | `n` | **empty-space noise sweep**: `B4 × B5`, 10 reps each |
+| `Z [tag]` | **stability sweep**: `B4 × B5 × B6`, raw burst/flicker analysis |
 | `A` | **apply** `TofConfig.h` values to all 5 sensors (verify + save) |
 
 Note: `w` takes the **register in hex** (`B4`) and the **value in decimal or
@@ -210,6 +249,11 @@ which is why `W 3 B4 F8` wrote 0.)
 - Still marginal: `sigma ≈ 240`, signal `~16–25`, and the distance reads
   ~280 mm for a 250 mm plate (a calibration offset — check `B1`/`B3`).
 - `spad=65535` on every read is unexplained.
+- **The averaged sweeps hide the real failure mode.** A live log on the robot
+  showed the MID sensor flickering `---` → `106` → `---` → `292` while a side
+  sensor sat frozen at exactly `230` for 30 consecutive rows. Averaging those
+  into one `validPct` number loses the fact that they are *flicker* and *stuck*,
+  not a target. Use `Z` to see the burst structure instead.
 
 ## Firmware note
 

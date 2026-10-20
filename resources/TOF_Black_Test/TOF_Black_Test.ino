@@ -25,6 +25,7 @@
  *   g <dist>       GRID: every B0 x B5 x B6 combo at <dist> mm, averaged
  *   v <dist>       VERIFY: current config at <dist> mm, averaged
  *   n              EMPTY-SPACE noise sweep: B4 x B5, 10 reps each
+ *   Z [tag]        STABILITY sweep: B4 x B5 x B6, raw burst/flicker analysis
  *   A              apply TofConfig.h values to ALL 5 sensors (verify + save)
  *
  * Grid output is CSV, one row per combo:
@@ -45,8 +46,9 @@
 #define TOF_TIMEOUT_MS 15
 #define SENSOR_ID      3
 
-// Which sensor the 'n' empty-space noise sweep runs on.
-#define NOISE_SENSOR_ID 2
+// Which sensor the 'n' empty-space noise sweep and the 'Z' stability sweep run
+// on. 3 = MID, the reference sensor for this tuning session.
+#define NOISE_SENSOR_ID 3
 
 SingleWireSerial bus(false);
 DistanceSensor sensor(&bus, SENSOR_ID);
@@ -536,6 +538,179 @@ static void runCorr() {
   Serial.println(F("=== correction sweep done ==="));
 }
 
+// ---- stability sweep (the hysteresis / flicker test) -----------------------
+// The averaged sweeps ('g', 'v', 'n') answer "how many reads were valid". They
+// CANNOT answer the question that actually matters for the phantom problem:
+// are the valid reads a SUSTAINED run (a real target) or a flicker (a phantom)?
+//
+// This routine captures the RAW per-read stream and reports its structure:
+//   * valid-run length histogram  -> burst shape (flicker vs sustained)
+//   * distance histogram          -> where the phantoms sit
+//   * consecutive-valid filter    -> phantom events surviving at N = 1..10
+//
+// It runs that analysis for EVERY config in the sweep, so one 'Z' answers
+// "which config turns the flicker into either nothing or a solid run".
+//
+// Point the sensor at EMPTY SPACE for the phantom test, or at the BLACK plate
+// for the detection test. The output is one CSV row per config:
+//   Z,tag,b4,b5,b6,reads,valid,validPct,runs,longest,ev1,ev3,ev5,ev10,dMin,dMax,dMean
+// where evN = phantom EVENTS surviving a consecutive-valid filter of N.
+// A good empty-space config has validPct low AND ev3 == 0.
+// A good black-target config has validPct high AND longest large.
+
+#define STAB_READS      1200   // raw reads per config (~1.5 s at ~800 reads/s)
+#define STAB_MAX_RUNS   64     // run-length histogram buckets
+#define STAB_MAX_DIST   16     // distance histogram buckets (25 mm each)
+#define STAB_MAX_N      10     // largest consecutive-valid N to evaluate
+
+// One config's raw capture + analysis. Returns nothing; prints one CSV row.
+//
+// Everything is computed in a SINGLE streaming pass — no per-read buffer. The
+// ATmega32U4 only has 2 KB of RAM and the sketch already uses most of it, so
+// storing 1200 reads (or even 1200 bits) is not affordable. The consecutive-
+// valid filter is evaluated for all N at once by keeping one streak counter
+// per N and one "published" flag per N.
+static void stabConfig(DistanceSensor& s, const char* tag,
+                       uint16_t b4, uint16_t b5, uint16_t b6) {
+  uint16_t runHist[STAB_MAX_RUNS];
+  uint16_t distHist[STAB_MAX_DIST];
+  memset(runHist, 0, sizeof(runHist));
+  memset(distHist, 0, sizeof(distHist));
+
+  uint16_t streak[STAB_MAX_N + 1];   // per-N consecutive-valid counter
+  bool     pub[STAB_MAX_N + 1];      // per-N published flag
+  uint16_t ev[STAB_MAX_N + 1];       // per-N event count
+  for (uint8_t n = 0; n <= STAB_MAX_N; n++) { streak[n] = 0; pub[n] = false; ev[n] = 0; }
+
+  uint16_t reads = 0, valid = 0;
+  uint16_t runs = 0, longest = 0, curRun = 0;
+  uint32_t dSum = 0; uint16_t dMin = 0xFFFF, dMax = 0;
+  uint32_t t0 = millis();
+
+  while (reads < STAB_READS) {
+    uint16_t raw = 0, status = 0;
+    bool ok = s.readRegister(0x01, &raw) && s.readRegister(0x00, &status);
+    bool v = ok && (status & 0x01) && raw != 0xFFF &&
+             raw >= RAW_MIN_VALID_MM && raw <= RAW_MAX_VALID_MM;
+    reads++;
+
+    if (v) {
+      valid++;
+      curRun++;
+      dSum += raw;
+      if (raw < dMin) dMin = raw;
+      if (raw > dMax) dMax = raw;
+      uint8_t bucket = raw / 25;
+      if (bucket >= STAB_MAX_DIST) bucket = STAB_MAX_DIST - 1;
+      distHist[bucket]++;
+    } else {
+      if (curRun) {
+        runs++;
+        if (curRun > longest) longest = curRun;
+        uint8_t bucket = (curRun >= STAB_MAX_RUNS) ? (STAB_MAX_RUNS - 1) : (uint8_t)curRun;
+        runHist[bucket]++;
+        curRun = 0;
+      }
+    }
+
+    // Consecutive-valid filter, all N in one pass.
+    for (uint8_t n = 1; n <= STAB_MAX_N; n++) {
+      if (v) { if (streak[n] < n) streak[n]++; }
+      else streak[n] = 0;
+      bool p = (streak[n] >= n);
+      if (p && !pub[n]) ev[n]++;
+      pub[n] = p;
+    }
+
+    // Safety: never spin longer than 8 s even if the bus stalls.
+    if (millis() - t0 > 8000) break;
+  }
+
+  // Flush a run that was still open when the capture ended.
+  if (curRun) {
+    runs++;
+    if (curRun > longest) longest = curRun;
+    uint8_t bucket = (curRun >= STAB_MAX_RUNS) ? (STAB_MAX_RUNS - 1) : (uint8_t)curRun;
+    runHist[bucket]++;
+  }
+
+  // --- print ---------------------------------------------------------------
+  Serial.print(F("Z,")); Serial.print(tag);
+  Serial.print(','); Serial.print(b4);
+  Serial.print(','); Serial.print(b5);
+  Serial.print(','); Serial.print(b6);
+  Serial.print(','); Serial.print(reads);
+  Serial.print(','); Serial.print(valid);
+  Serial.print(','); Serial.print(reads ? (uint32_t)valid * 100 / reads : 0);
+  Serial.print(','); Serial.print(runs);
+  Serial.print(','); Serial.print(longest);
+  Serial.print(','); Serial.print(ev[1]);
+  Serial.print(','); Serial.print(ev[3]);
+  Serial.print(','); Serial.print(ev[5]);
+  Serial.print(','); Serial.print(ev[10]);
+  Serial.print(','); Serial.print(valid ? dMin : 0);
+  Serial.print(','); Serial.print(valid ? dMax : 0);
+  Serial.print(','); Serial.print(valid ? dSum / valid : 0);
+  Serial.println();
+
+  // Burst-shape detail, only when there is something to describe.
+  if (runs) {
+    Serial.print(F("#   runs:"));
+    for (uint8_t b = 1; b < STAB_MAX_RUNS; b++)
+      if (runHist[b]) { Serial.print(' '); Serial.print(b); Serial.print('x'); Serial.print(runHist[b]); }
+    Serial.println();
+    Serial.print(F("#   dist:"));
+    for (uint8_t b = 0; b < STAB_MAX_DIST; b++)
+      if (distHist[b]) { Serial.print(' '); Serial.print(b * 25); Serial.print('-'); Serial.print(b * 25 + 24); Serial.print('x'); Serial.print(distHist[b]); }
+    Serial.println();
+  }
+}
+
+// The sweep itself: B4 x B5 x B6, saved+restarted so each value takes effect.
+static const uint16_t STAB_B4[] = { 248, 254 };
+static const uint16_t STAB_B5[] = { 0, 10, 20, 30, 40 };
+static const uint16_t STAB_B6[] = { 100, 300 };
+
+static void runStab(const char* tag) {
+  DistanceSensor& s = allSensors[NOISE_SENSOR_ID - 1];
+  uint16_t o4 = rd(0xB4), o5 = rd(0xB5), o6 = rd(0xB6);
+  Serial.println();
+  Serial.println(F("=== STABILITY SWEEP (flicker / hysteresis) ==="));
+  Serial.print(F("sensor id ")); Serial.println(NOISE_SENSOR_ID);
+  Serial.print(F("tag=")); Serial.println(tag);
+  Serial.print(F("B4 x B5 x B6 = "));
+  Serial.print(sizeof(STAB_B4)/2); Serial.print('x');
+  Serial.print(sizeof(STAB_B5)/2); Serial.print('x');
+  Serial.print(sizeof(STAB_B6)/2);
+  Serial.print(F(" combos, ")); Serial.print(STAB_READS);
+  Serial.println(F(" raw reads each"));
+  Serial.println(F("Z,tag,b4,b5,b6,reads,valid,validPct,runs,longest,ev1,ev3,ev5,ev10,dMin,dMax,dMean"));
+
+  for (uint8_t i = 0; i < sizeof(STAB_B4)/2; i++)
+  for (uint8_t j = 0; j < sizeof(STAB_B5)/2; j++)
+  for (uint8_t k = 0; k < sizeof(STAB_B6)/2; k++) {
+    uint16_t b4 = STAB_B4[i], b5 = STAB_B5[j], b6 = STAB_B6[k];
+    s.writeRegister(0xB4, b4);
+    s.writeRegister(0xB5, b5);
+    s.writeRegister(0xB6, b6);
+    s.saveConfiguration();
+    s.restartSensor();
+    delay(400);
+    stabConfig(s, tag, b4, b5, b6);
+  }
+
+  s.writeRegister(0xB4, o4);
+  s.writeRegister(0xB5, o5);
+  s.writeRegister(0xB6, o6);
+  s.saveConfiguration();
+  s.restartSensor();
+  delay(400);
+  Serial.print(F("  (restored B4=")); Serial.print(o4);
+  Serial.print(F(" B5=")); Serial.print(o5);
+  Serial.print(F(" B6=")); Serial.print(o6); Serial.println(')');
+  Serial.println(F("=== stability sweep done ==="));
+}
+
 // ---- apply the winning config to all five sensors --------------------------
 // Values come from TofConfig.h. Writes each register, reads it back, saves and
 // restarts, ONE SENSOR AT A TIME, with delays so the shared bus settles between
@@ -672,6 +847,7 @@ static void printHelp() {
   Serial.println(F(" g <dist>     GRID: all B0 x B5 x B6 combos at <dist> mm, averaged"));
   Serial.println(F(" v <dist>     VERIFY current config at <dist> mm, averaged"));
   Serial.println(F(" n            EMPTY-SPACE noise sweep: B4 x B5, 10 reps each"));
+  Serial.println(F(" Z [tag]      STABILITY sweep: B4 x B5 x B6, raw burst analysis"));
   Serial.println(F(" C            B1/B2 correction sweep on empty space (offset x crosstalk)"));
   Serial.println(F(" D <dist>     B2 crosstalk sweep at <dist> mm with the BLACK target"));
   Serial.println(F(" X <id> [ms]  RAW per-read capture from sensor <id> (default 3)"));
@@ -746,6 +922,14 @@ static void handleLine(char* s) {
     case 'n': case 'N': runNoise(); break;
 
     case 'C': runCorr(); break;
+
+    case 'Z': {
+      // 'Z [tag]' — stability sweep. Tag defaults to 'empty'; pass 'black' when
+      // the plate is in front so the CSV rows are self-describing.
+      const char* tag = (*s) ? s : "empty";
+      runStab(tag);
+      break;
+    }
 
     case 'D': {
       uint16_t dist = *s ? (uint16_t)strtol(s, NULL, 10) : 300;
