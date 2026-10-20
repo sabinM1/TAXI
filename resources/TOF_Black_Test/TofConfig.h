@@ -39,25 +39,24 @@
 // so this must stay LOW or the target itself is rejected — but not so low that
 // ambient noise passes.
 //
-// 40 is the HIGHEST value the sweep tested and the most conservative setting
-// that still detects the black target. The arena is assumed noisier than the
-// bench, and this is the lever that rejects ambient IR: readings below 40 are
-// dropped by the sensor itself, before the firmware's N=3 filter ever sees
-// them. Across four black runs it still reads 88-96% valid in sustained 24-37
-// measurement bursts, so the target is never missed for long.
-//
-// The cost is real: black detection falls from 100% (B5=0) to 91% (B5=40),
-// about 2% per 10 counts. If 91% proves too flickery, back off to 30.
+// 30 is where the four empty-space runs put the floor. Across 4 runs of ~26
+// measurements each, 254/30/200 let through ONE phantom measurement total —
+// exactly the same as 254/40/300. Raising B5 to 40 therefore buys no extra
+// rejection while costing 6% of black detection (95.6% -> 89.6%), so 30 is the
+// better trade. The lone phantom is a single measurement, so the firmware's
+// N=3 filter still drops it.
 // NOTE: this is NOT compared against register 0x02 (a row can show sigMax below
 // B5 and still pass) — trust the valid bit.
-#define TOF_CFG_B5  40
+#define TOF_CFG_B5  30
 
 // Sigma threshold (reg 0xB6), millimetres. Lower = stricter.
 //
-// Paired with B5=40 this is what gives 0% valid measurements on empty space:
-// at 254/40/300 nothing at all gets through, while 254/40/200 still leaks 10%.
-// 100 is too strict and the black target itself flickers (64-80%).
-#define TOF_CFG_B6  300
+// 200 pairs with B5=30 for the cleanest empty-space result of any config:
+// 254/30/200 let through one phantom measurement across four runs, and it
+// keeps the black target at 95.6% valid (min 91% over seven runs). B6=300 at
+// the same B5 leaks 4 phantoms; B6=100 is too strict and the black target
+// itself flickers (64-80%).
+#define TOF_CFG_B6  200
 
 // Max distance (reg 0xB8), millimetres. The empty-space phantoms are LONG
 // readings (600-800 mm), so this is the surgical fix: anything past 500 mm is
