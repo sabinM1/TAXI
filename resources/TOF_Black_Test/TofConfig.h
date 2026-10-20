@@ -39,25 +39,25 @@
 // so this must stay LOW or the target itself is rejected — but not so low that
 // ambient noise passes.
 //
-// 30 is the value the black target was verified against. The 'Z' sweep shows
-// every B5 >= 10 gives ev3 = 0 on empty space (the N=3 filter kills the
-// phantoms), so there is no phantom benefit to going lower; 30 keeps the
-// margin for the weak black return.
+// 40 is the HIGHEST value the sweep tested and the most conservative setting
+// that still detects the black target. The arena is assumed noisier than the
+// bench, and this is the lever that rejects ambient IR: readings below 40 are
+// dropped by the sensor itself, before the firmware's N=3 filter ever sees
+// them. Across four black runs it still reads 88-96% valid in sustained 24-37
+// measurement bursts, so the target is never missed for long.
+//
+// The cost is real: black detection falls from 100% (B5=0) to 91% (B5=40),
+// about 2% per 10 counts. If 91% proves too flickery, back off to 30.
 // NOTE: this is NOT compared against register 0x02 (a row can show sigMax below
 // B5 and still pass) — trust the valid bit.
-#define TOF_CFG_B5  30
+#define TOF_CFG_B5  40
 
 // Sigma threshold (reg 0xB6), millimetres. Lower = stricter.
 //
-// The 'Z' sweep on the BLACK target is what picks this. Grouping by B6:
-//   100 -> black valid 64-80%, runs 4-16   (too strict, the target flickers)
-//   200 -> black valid 89-100%, longest 24-62  (sustained runs)
-//   300 -> black valid 91-100%, longest 19-56  (good, but more flicker)
-// 200 gives the most SUSTAINED detection, which is what the N=3 filter needs:
-// at 254/30/200 the target reads 100% valid as ONE 56-long run (ev3 = 1),
-// while at 254/30/300 it breaks into 4 separate sightings (ev3 = 4).
-// 200 is also clean on empty space (0 valid measurements at 254/30/200).
-#define TOF_CFG_B6  200
+// Paired with B5=40 this is what gives 0% valid measurements on empty space:
+// at 254/40/300 nothing at all gets through, while 254/40/200 still leaks 10%.
+// 100 is too strict and the black target itself flickers (64-80%).
+#define TOF_CFG_B6  300
 
 // Max distance (reg 0xB8), millimetres. The empty-space phantoms are LONG
 // readings (600-800 mm), so this is the surgical fix: anything past 500 mm is
