@@ -178,7 +178,7 @@
 // TIMING
 // ============================================================================
 
-#define SERIAL_DEBUG      true   // boot/strategy messages (cheap, few lines)
+#define SERIAL_DEBUG      false  // boot/strategy messages (cheap, few lines)
 
 // ----- strategy test mode ---------------------------------------------------
 // Run ONLY the opening tactic, then stop. After the DIP-selected opening
@@ -196,10 +196,10 @@
 #define STRATEGY_TEST     false
 // Full telemetry mode: state transitions + a 400 ms status table with sensors,
 // bearing, motors, edge flags and loop timing. Also the switch that keeps the
-// ring telemetry alive during a fight, and the one that arms the watchdog.
+// ring telemetry alive during a fight.
 // Disable for matches: the serial table blocks the loop for ~50 ms per dump
 // (USB CDC at 115200), which is wasted time and skews sensor freshness.
-#define DEBUG_VERBOSE     true
+#define DEBUG_VERBOSE     false  // MATCH BUILD: no telemetry, ring dark in fight
 // How often the status table is printed, in ms — the debug READOUT RATE.
 //
 // The table is ~580 bytes, and Serial.print() BLOCKS whenever the 32U4's USB CDC

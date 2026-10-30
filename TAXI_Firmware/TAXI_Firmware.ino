@@ -21,26 +21,22 @@
 #include <avr/wdt.h>   // watchdog
 
 // ---------------------------------------------------------------------------
-// Watchdog — armed for DEBUG_VERBOSE (bench) builds only, on purpose.
+// Watchdog — enabled unconditionally, independent of DEBUG_VERBOSE.
 //
-// A watchdog reset mid-match is not a recovery, it is the end of the round: on
-// the way back up the start module still reads HIGH (the fight is on), so
-// setup() trips the boot lock and parks the robot blinking until someone
-// power-cycles it. Without a watchdog a hung loop simply keeps the last motor
-// command, which in sumo frequently still finishes the push it started.
-//
-// On the bench the trade runs the other way: a hang means a 100%-duty motor
-// turning next to your hands, and a reset there recovers cleanly (the module
-// reads LOW, so the robot just re-arms into IDLE). Bench builds also hold the
-// only unbounded blocking call in the firmware — the ~50 ms serial table.
+// A hang now resets the board instead of holding the last motor command. The
+// trade: a watchdog reset mid-match is not a recovery, it is the end of the
+// round — on the way back up the start module still reads HIGH (the fight is
+// on), so setup() trips the boot lock and parks the robot blinking until
+// someone power-cycles it. That is accepted here on purpose: a reset is
+// preferred over a 100%-duty motor running on unattended.
 //
 // 250 ms is ~100x a normal loop (~2 ms) and far above the longest
 // interrupt-disabled section (~210 us in FastLED.show()), so it can only ever
-// fire on a genuine lock-up, never on ordinary timing.
-//
-// Rule that follows from this: set DEBUG_VERBOSE false for a real match (that
-// is what disarms the watchdog and stops the serial dumps).
-#define WATCHDOG_ENABLED  (DEBUG_VERBOSE)
+// fire on a genuine lock-up, never on ordinary timing. The only unbounded
+// blocking call in the firmware is the ~50 ms serial table, and that is
+// compiled out whenever DEBUG_VERBOSE is false, so a match build has no
+// legitimate stall anywhere near 250 ms.
+#define WATCHDOG_ENABLED  true
 
 // Render all 5 ToF sensors as a green->red distance gradient on the outer
 // ring (uses RingInfoDisplay.h helpers). Far (>= RING_DIST_GREEN_CM) = green,

@@ -243,7 +243,7 @@ These are the "best of" the researched mini-sumo openings (rush, turn-and-dash, 
 
 Ring during the match: **off** (TACTIC/SEARCH/ATTACK/BACKOFF/EVADE) — it is blanked once on entering the fight and `FastLED.show()` stops being called, so it costs no loop time and cannot disturb the ToF bus. IDLE = live ToF gradient + white line overlay + speed indicator on LED 1 + green heartbeat. STOP = solid white, latched once.
 
-**Debug exception:** with `DEBUG_VERBOSE true` the IDLE telemetry (ToF gradient + line overlay + heartbeat) keeps running through the fight as well, so you can watch what the sensors see while the robot actually drives. It is safe for the ToF bus — `loop()` always finishes the sensor read before the ring update calls `FastLED.show()`. STOP still overrides it with solid white. Set `DEBUG_VERBOSE false` for a real match: that is what makes the ring go dark and silent while fighting, and it is also what disarms the watchdog (§12).
+**Debug exception:** with `DEBUG_VERBOSE true` the IDLE telemetry (ToF gradient + line overlay + heartbeat) keeps running through the fight as well, so you can watch what the sensors see while the robot actually drives. It is safe for the ToF bus — `loop()` always finishes the sensor read before the ring update calls `FastLED.show()`. STOP still overrides it with solid white. Set `DEBUG_VERBOSE false` for a real match: that is what makes the ring go dark and silent while fighting and stops the serial dumps. The 250 ms watchdog stays armed either way (§12).
 
 Two details worth knowing while watching that fight-time telemetry:
 
@@ -328,7 +328,7 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
 | Ring frozen / ToF stutter together | `FastLED.show()` interrupt blocking during a sensor read | Keep loop order: sensors → motors → ring (already enforced) |
 | Robot hunts for a long time before engaging | `TARGET_ENGAGE_MM` is small for the venue, or a ToF sensor is degraded so the closest reading is missing | Raise `TARGET_ENGAGE_MM`; check the `health` column in the status line |
 | Ring solid white and robot unresponsive after a reset | Any reset mid-round is caught by the boot lock — the module still reports fight | Ask the referee for stop, then power-cycle. Unavoidable by design (§13) |
-| Robot restarts every ~250 ms on the bench (motors cut, then boot again) | `DEBUG_VERBOSE` build arms a 250 ms watchdog and something blocked the loop (long serial dump / host stopped reading the port) | Keep the Serial Monitor open, or set `DEBUG_VERBOSE false` and re-flash |
+| Robot restarts every ~250 ms on the bench (motors cut, then boot again) | The 250 ms watchdog fired — something blocked the loop (long serial dump / host stopped reading the port) | Keep the Serial Monitor open, or set `DEBUG_VERBOSE false` and re-flash (no serial dump = no stall) |
 | Compiles but USB port disappears mid-upload on Leonardo | Known 32U4 USB-resets | Double-tap reset, then upload within the 8 s bootloader window |
 
 ---
@@ -336,7 +336,7 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
 ## 12. Safety Notes
 
 - **LiHV battery:** charge ONLY with a LiHV-capable charger (4.35 V/cell), balance-charge always, charge/store in a fireproof LiPo bag, never below 3.0 V/cell or above 4.35 V/cell; discard swollen packs.
-- **Watchdog:** bench builds (`DEBUG_VERBOSE true`) arm a 250 ms watchdog, so if the loop ever locks up while you are holding the robot the board resets and the motors cut instead of running on. Match builds deliberately do **not** arm it — see §13.
+- **Watchdog:** a 250 ms watchdog is always armed (independent of `DEBUG_VERBOSE`), so if the loop ever locks up the board resets and the motors cut instead of running on. The trade is that a reset mid-round ends the round — see §13.
 - **Blade:** the Kanzawa blade is a honed steel edge — handle the robot by the chassis, never by the front.
 - **Motors:** wheels can grab fingers/cable at full speed — bench-test with the robot on blocks and `MOTOR_BENCH_LIMIT_ENABLED = true`.
 - Spun-up robot falling off a desk will not stop: always bench-test with wheels free-spinning.
@@ -352,9 +352,9 @@ Serial monitor @115200 prints `[TAXI] firmware up` and the latched DIP strategy 
 - QRE thresholds are fixed at compile time; no on-venue auto-calibration routine yet.
 - Tactic step durations are estimates pending on-dohyo calibration (§11).
 - M60F reads return the last stored value in ~0.75 ms, but under active ranging the sensor MCU can hold the bus for its full sampling budget (reg `0xB0` = 45 ms); `TOF_TIMEOUT_MS` is 55 to cover that. Only one sensor is polled per loop, so a dead sensor bounds the loop at ~55 ms, not 5 × 55 ms.
-- **No watchdog in a match build** (`DEBUG_VERBOSE false`), on purpose: a hung loop keeps the last motor command (which in sumo often still finishes the push) instead of rebooting the robot. Bench builds do arm it at 250 ms — the full reasoning is at the top of `TAXI_Firmware.ino`.
+- **The watchdog is armed in every build** (250 ms, independent of `DEBUG_VERBOSE`): a hung loop reboots the board rather than holding the last motor command. The cost is that a reset mid-round ends the round (see the next point). Full reasoning at the top of `TAXI_Firmware.ino`.
 - **Any reset during a round ends that round.** On the way back up the start module still reads HIGH, so `setup()` hits the boot lock and the robot blinks until someone power-cycles it. That is the same rule that catches a latched-on module before a match, so it is intentional — but it means a brownout or EMI reset has no in-match recovery path.
-- `DEBUG_VERBOSE` builds are not timing-equivalent to match builds: the serial status line blocks the loop for a few ms per dump, sensor readings go correspondingly staler, and the watchdog is armed. Use them to observe, not to tune feel.
+- `DEBUG_VERBOSE` builds are not timing-equivalent to match builds: the serial status line blocks the loop for a few ms per dump and sensor readings go correspondingly staler. Use them to observe, not to tune feel.
 - All five ToF sensors are polled in every state, so a full sweep takes ~10 ms. If a future change needs faster front-sensor updates, the round-robin in `tofReadOne()` is the place to reintroduce a scan mode — but note that BACKOFF and the chase both depend on the side sensors being live.
 
 ---
