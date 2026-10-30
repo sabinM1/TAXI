@@ -400,22 +400,27 @@ static const struct AttackSpeedPoint { uint16_t mm; uint8_t pct; } ATTACK_SPEED_
                                      // overshoot a target it has not finished
                                      // turning onto yet.
 
-// ----- target-lost search: slower spin + continuous-spin watchdog -----------
-// The SPIN search pattern (and the degraded blind spin) rotate in place. At the
-// arc speed that pirouette looked violent and covered no ground, so the spin has
-// its own, LOWER speed. On top of that, a spin held too long is cut: the robot
-// has no encoders, so "is it spinning?" is judged from the COMMAND it issued (see
-// isSpinCommand() in StateMachine.h), and the watchdog stops the endless fast
-// 360-degree spin a lost target used to cause.
-#define SEARCH_SPIN_SPEED_PCT   18   // in-place spin speed (SPIN pattern +
-                                     // degraded blind spin). Deliberately below
-                                     // SEARCH_SPEED_PCT: a slow, deliberate
-                                     // pirouette instead of a fast one.
-#define SEARCH_SPIN_MAX_MS     1000  // continuous-spin watchdog: an in-place spin
-                                     // held this long without a sighting is cut
-                                     // (see searchUpdate()).
-#define SEARCH_SPIN_PAUSE_MS    400  // pause after a watchdog trip, before the
-                                     // spin resumes in the opposite direction.
+// ----- target-lost search: arc + straight dash ------------------------------
+// When the opponent is lost the robot ARCS (it no longer pirouettes in place:
+// an arc covers ground while it sweeps, so it is far more likely to stumble back
+// onto the opponent, and it can never grind round on the spot). After
+// SEARCH_PATTERN_TIMEOUT_MS of arcing with nothing in sight, the robot drives
+// STRAIGHT for SEARCH_DASH_MS to cross ground, then flips its arc direction and
+// starts again. The straight dash is what stops the search from becoming a
+// circle: it breaks the arc and puts the robot somewhere new on the dohyo.
+//
+// The line-edge override still outranks all of this (see stateMachineUpdate()),
+// so a dash can never drive the robot over the border — the dash is interrupted
+// the instant any line sensor reads white.
+#define SEARCH_ARC_INNER_PCT    12   // inner-wheel speed of the search arc, as a
+                                     // percent. The outer wheel runs at
+                                     // SEARCH_SPEED_PCT, so this sets the arc
+                                     // radius: lower = tighter turn. 12 gives a
+                                     // wide, ground-covering arc, not a pivot.
+#define SEARCH_DASH_MS         100   // straight-line dash after the pattern
+                                     // timeout, before flipping the arc
+                                     // direction. Short on purpose: it is a
+                                     // repositioning step, not a charge.
 #define EVADE_REVERSE_SPEED_PCT -80   // escape burst away from an edge
 
 // ============================================================================

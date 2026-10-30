@@ -52,12 +52,11 @@ static uint32_t searchModeStart = 0;
 static int8_t   searchDir = 1;          // +1 turn right, -1 turn left
 static uint32_t lastSeenMs = 0;
 
-// Continuous-spin watchdog. The robot has no encoders, so "spinning" is judged
-// from the COMMAND (see isSpinCommand): an in-place spin is left/right driven
-// with opposite signs. spinSince is when the current uninterrupted spin began;
-// spinPauseUntil holds the short stop after a watchdog trip. See searchUpdate().
-static uint32_t spinSince = 0;
-static uint32_t spinPauseUntil = 0;
+// Straight-dash bookkeeping. After SEARCH_PATTERN_TIMEOUT_MS of arcing with
+// nothing in sight the robot drives straight for SEARCH_DASH_MS to cross ground,
+// then flips its arc direction. dashUntil is the millis() the dash ends; 0 means
+// "not dashing". See searchUpdate().
+static uint32_t dashUntil = 0;
 
 // Evade bookkeeping. One program runs as two timed phases, FLEE -> TURN, and
 // evadeFrom tracks the edge the flee is currently escaping from — that can
@@ -257,83 +256,62 @@ static bool targetInContact() {
 static void enterSearch() {
   searchModeStart = millis();
   if (lastSeenValid) searchDir = (lastSeenBearing >= 0) ? 1 : -1;
+  // A fresh search always starts arcing, never mid-dash. Without this, a dash
+  // left over from a previous SEARCH episode would still be running when the
+  // robot re-enters SEARCH from EVADE/BACKOFF/ATTACK, so the first thing it did
+  // would be a straight-line dash instead of the arc it is supposed to start on.
+  dashUntil = 0;
 }
 
 /**
- * True when a motor command is an in-place spin rather than an arc or a straight
- * drive: the two wheels are driven in OPPOSITE directions with comparable
- * magnitude. The robot has no encoders, so this is the only way the firmware can
- * tell "spinning" from "driving" — it judges the command it issued, not the
- * chassis. An arc (same sign, unequal) and a straight drive (same sign, equal)
- * both return false.
- */
-static bool isSpinCommand(int l, int r) {
-  if ((l > 0) == (r > 0)) return false;      // same direction -> not a spin
-  int a = abs(l), b = abs(r);
-  int hi = (a > b) ? a : b, lo = (a > b) ? b : a;
-  return (hi - lo) <= (hi / 2);              // within 2:1 -> a spin, not an arc
-}
-
-/**
- * Steer the robot while hunting. Three patterns:
- *   SPIN  — rotate in place (fastest sensor sweep, never leaves the ring)
- *   ARC   — wide arcs, covers ground while scanning
- *   SWEEP — alternating shallow arcs (figure-8-ish), most area covered
- * After SEARCH_PATTERN_TIMEOUT_MS without seeing anything, the pattern
- * mirrors (searchDir flips) so we never spiral forever in one direction.
+ * Steer the robot while hunting. The robot ARCS — it never pirouettes in place.
  *
- * The SPIN pattern runs at SEARCH_SPIN_SPEED_PCT (slower than the arc speed)
- * and is policed by the continuous-spin watchdog: an in-place spin held for
- * SEARCH_SPIN_MAX_MS without a sighting is cut for SEARCH_SPIN_PAUSE_MS, then
- * resumes in the opposite direction. That is what stops the endless fast
- * 360-degree pirouette a lost target used to cause — the robot now spins
- * deliberately, pauses, and reverses instead of grinding round forever.
+ *   arc    the outer wheel runs at SEARCH_SPEED_PCT, the inner at
+ *          SEARCH_ARC_INNER_PCT, so the robot sweeps a wide circle that covers
+ *          ground while it scans. The arc direction is searchDir.
+ *
+ *   dash   after SEARCH_PATTERN_TIMEOUT_MS of arcing with nothing in sight, the
+ *          robot drives STRAIGHT for SEARCH_DASH_MS. This is what keeps the
+ *          search from degenerating into a circle: the dash carries the robot
+ *          somewhere new on the dohyo, then the arc resumes in the OPPOSITE
+ *          direction. So the path is arc -> dash -> arc the other way -> dash,
+ *          which covers the ring instead of orbiting one spot.
+ *
+ * The line-edge override in stateMachineUpdate() outranks this, so the dash can
+ * never drive the robot over the border — a white reading interrupts it at once.
+ *
+ * The `style` argument is accepted for compatibility with the DIP-selected
+ * search style, but every style now arcs: the in-place SPIN pattern was removed
+ * because a lost target used to send the robot into an endless fast pirouette.
  */
 static void searchUpdate(SearchStyle style) {
-  int sp = SEARCH_SPEED_PCT;
-  if (millis() - searchModeStart > SEARCH_PATTERN_TIMEOUT_MS) {
-    searchModeStart = millis();
+  (void)style;   // every style arcs now; kept for the DIP/strategy interface
+
+  // Dash finished -> flip the arc direction and start a fresh arc leg.
+  if (dashUntil != 0 && (int32_t)(millis() - dashUntil) >= 0) {
+    dashUntil = 0;
     searchDir = -searchDir;
+    searchModeStart = millis();
   }
 
-  int l, r;
-  switch (style) {
-    case SEARCH_SPIN:   // in-place rotation, fastest sensor sweep
-      l = (searchDir > 0) ?  SEARCH_SPIN_SPEED_PCT : -SEARCH_SPIN_SPEED_PCT;
-      r = -l;
-      break;
-    case SEARCH_ARC:    // wide arcs, covers ground while moving
-      l = (searchDir > 0) ? sp : sp / 2;
-      r = (searchDir > 0) ? sp / 2 : sp;
-      break;
-    case SEARCH_SWEEP:  // figure-8-ish: alternate arcs every cycle
-    default:
-      l = (searchDir > 0) ? sp : sp / 3;
-      r = (searchDir > 0) ? sp / 3 : sp;
-      break;
+  // Mid-dash: straight ahead, both wheels at the search speed.
+  if (dashUntil != 0) {
+    motorsSet(SEARCH_SPEED_PCT, SEARCH_SPEED_PCT);
+    return;
   }
 
-  // Continuous-spin watchdog. Only an in-place spin can pirouette forever, so
-  // the clock only runs while the command is a spin; any other command (an arc,
-  // a straight drive, or a stop from another state) clears it, which is why a
-  // fresh target loss always starts a fresh count.
-  if (isSpinCommand(l, r)) {
-    int pl, pr; motorsGetLast(&pl, &pr);
-    if (!isSpinCommand(pl, pr)) spinSince = millis();   // fresh spin -> start clock
-    if (millis() - spinSince >= SEARCH_SPIN_MAX_MS) {
-      // Spun long enough with nothing in sight: stop, reverse, and pause.
-      motorsStop();
-      searchDir = -searchDir;
-      searchModeStart = millis();
-      spinPauseUntil = millis() + SEARCH_SPIN_PAUSE_MS;
-      return;
-    }
+  // Arc leg timed out with nothing in sight -> begin the straight dash.
+  if (millis() - searchModeStart > SEARCH_PATTERN_TIMEOUT_MS) {
+    dashUntil = millis() + SEARCH_DASH_MS;
+    motorsSet(SEARCH_SPEED_PCT, SEARCH_SPEED_PCT);
+    return;
   }
 
-  // Hold the pause after a watchdog trip before spinning again.
-  if ((int32_t)(millis() - spinPauseUntil) < 0) { motorsStop(); return; }
-
-  motorsSet(l, r);
+  // Arc: outer wheel at full search speed, inner wheel slowed to set the radius.
+  int outer = SEARCH_SPEED_PCT;
+  int inner = SEARCH_ARC_INNER_PCT;
+  if (searchDir > 0) motorsSet(outer, inner);
+  else               motorsSet(inner, outer);
 }
 
 /**
@@ -727,10 +705,10 @@ void stateMachineUpdate() {
       // off the dohyo. Otherwise run the selected search pattern — whose first leg
       // enterSearch() turns toward the last-seen direction.
       if (degraded) {
-        // Blind spin is the safest way to stumble back onto the opponent and it
-        // can never drive off the dohyo. Routed through the SPIN pattern so it
-        // runs at the slower spin speed and is policed by the spin watchdog.
-        searchUpdate(SEARCH_SPIN);
+        // Blind search is the safest way to stumble back onto the opponent and it
+        // can never drive off the dohyo. Routed through searchUpdate() so it arcs
+        // and dashes like every other search instead of pirouetting in place.
+        searchUpdate(SEARCH_ARC);
         break;
       }
       searchUpdate(STRATEGIES[strategyIndex].search);

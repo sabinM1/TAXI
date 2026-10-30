@@ -49,6 +49,10 @@
 #include "Config.h"
 #include "Motor.h"
 
+// Search style selected by the DIP/strategy table. Every style now ARCS (see
+// searchUpdate()): the in-place SPIN pattern was removed because a lost target
+// used to send the robot into an endless fast pirouette. The enum is kept so the
+// strategy data and the designer keep their existing field.
 enum SearchStyle : uint8_t { SEARCH_SPIN, SEARCH_ARC, SEARCH_SWEEP };
 
 /**
