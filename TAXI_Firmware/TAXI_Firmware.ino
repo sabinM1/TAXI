@@ -293,12 +293,29 @@ void setup() {
   // the board come up, and anything printed before Serial.begin() is lost.
   Serial.begin(MONITOR_BAUD);
 
+  // WHY did we boot? Read MCUSR BEFORE it is cleared below. This is the only
+  // way to tell a brownout (battery sag when the motors draw inrush) apart from
+  // a watchdog reset (a loop stall) — both reboot the board and both then trip
+  // the start-pin boot lock, so the symptom is identical without this.
+  //   BORF = brownout  -> power/battery problem, not firmware
+  //   WDRF = watchdog  -> a loop() iteration exceeded WDTO_250MS
+  //   PORF = power-on  -> normal cold boot
+  uint8_t resetCause = MCUSR;
+
   // Watchdog housekeeping before anything slow. A reset caused by the watchdog
   // leaves WDRF set in MCUSR with the watchdog STILL ARMED on its shortest
   // timeout, so it must be cleared and switched off before the 3 s delay —
   // otherwise the board would reset in a loop and never finish booting.
   MCUSR = 0;
   wdt_disable();
+
+#if SERIAL_DEBUG
+  Serial.print(F("[TAXI] reset cause: "));
+  if (resetCause & _BV(BORF))      Serial.println(F("BROWNOUT (battery sag)"));
+  else if (resetCause & _BV(WDRF)) Serial.println(F("WATCHDOG (loop stall)"));
+  else if (resetCause & _BV(PORF)) Serial.println(F("POWER-ON"));
+  else                             Serial.println(F("external / unknown"));
+#endif
 
   // Claim the motor pins next. From power-on until now they float in input
   // mode, which lets the driver chatter the motors (part of the ~0.5 s
