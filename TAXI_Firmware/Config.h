@@ -399,6 +399,23 @@ static const struct AttackSpeedPoint { uint16_t mm; uint8_t pct; } ATTACK_SPEED_
                                      // scaled by this), slow enough not to
                                      // overshoot a target it has not finished
                                      // turning onto yet.
+
+// ----- target-lost search: slower spin + continuous-spin watchdog -----------
+// The SPIN search pattern (and the degraded blind spin) rotate in place. At the
+// arc speed that pirouette looked violent and covered no ground, so the spin has
+// its own, LOWER speed. On top of that, a spin held too long is cut: the robot
+// has no encoders, so "is it spinning?" is judged from the COMMAND it issued (see
+// isSpinCommand() in StateMachine.h), and the watchdog stops the endless fast
+// 360-degree spin a lost target used to cause.
+#define SEARCH_SPIN_SPEED_PCT   18   // in-place spin speed (SPIN pattern +
+                                     // degraded blind spin). Deliberately below
+                                     // SEARCH_SPEED_PCT: a slow, deliberate
+                                     // pirouette instead of a fast one.
+#define SEARCH_SPIN_MAX_MS     1000  // continuous-spin watchdog: an in-place spin
+                                     // held this long without a sighting is cut
+                                     // (see searchUpdate()).
+#define SEARCH_SPIN_PAUSE_MS    400  // pause after a watchdog trip, before the
+                                     // spin resumes in the opposite direction.
 #define EVADE_REVERSE_SPEED_PCT -80   // escape burst away from an edge
 
 // ============================================================================

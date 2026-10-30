@@ -52,6 +52,13 @@ static uint32_t searchModeStart = 0;
 static int8_t   searchDir = 1;          // +1 turn right, -1 turn left
 static uint32_t lastSeenMs = 0;
 
+// Continuous-spin watchdog. The robot has no encoders, so "spinning" is judged
+// from the COMMAND (see isSpinCommand): an in-place spin is left/right driven
+// with opposite signs. spinSince is when the current uninterrupted spin began;
+// spinPauseUntil holds the short stop after a watchdog trip. See searchUpdate().
+static uint32_t spinSince = 0;
+static uint32_t spinPauseUntil = 0;
+
 // Evade bookkeeping. One program runs as two timed phases, FLEE -> TURN, and
 // evadeFrom tracks the edge the flee is currently escaping from — that can
 // change mid-program if a different sensor goes over white (see evadeUpdate()).
@@ -253,12 +260,34 @@ static void enterSearch() {
 }
 
 /**
+ * True when a motor command is an in-place spin rather than an arc or a straight
+ * drive: the two wheels are driven in OPPOSITE directions with comparable
+ * magnitude. The robot has no encoders, so this is the only way the firmware can
+ * tell "spinning" from "driving" — it judges the command it issued, not the
+ * chassis. An arc (same sign, unequal) and a straight drive (same sign, equal)
+ * both return false.
+ */
+static bool isSpinCommand(int l, int r) {
+  if ((l > 0) == (r > 0)) return false;      // same direction -> not a spin
+  int a = abs(l), b = abs(r);
+  int hi = (a > b) ? a : b, lo = (a > b) ? b : a;
+  return (hi - lo) <= (hi / 2);              // within 2:1 -> a spin, not an arc
+}
+
+/**
  * Steer the robot while hunting. Three patterns:
  *   SPIN  — rotate in place (fastest sensor sweep, never leaves the ring)
  *   ARC   — wide arcs, covers ground while scanning
  *   SWEEP — alternating shallow arcs (figure-8-ish), most area covered
  * After SEARCH_PATTERN_TIMEOUT_MS without seeing anything, the pattern
  * mirrors (searchDir flips) so we never spiral forever in one direction.
+ *
+ * The SPIN pattern runs at SEARCH_SPIN_SPEED_PCT (slower than the arc speed)
+ * and is policed by the continuous-spin watchdog: an in-place spin held for
+ * SEARCH_SPIN_MAX_MS without a sighting is cut for SEARCH_SPIN_PAUSE_MS, then
+ * resumes in the opposite direction. That is what stops the endless fast
+ * 360-degree pirouette a lost target used to cause — the robot now spins
+ * deliberately, pauses, and reverses instead of grinding round forever.
  */
 static void searchUpdate(SearchStyle style) {
   int sp = SEARCH_SPEED_PCT;
@@ -267,21 +296,44 @@ static void searchUpdate(SearchStyle style) {
     searchDir = -searchDir;
   }
 
+  int l, r;
   switch (style) {
     case SEARCH_SPIN:   // in-place rotation, fastest sensor sweep
-      motorsSet(searchDir > 0 ? sp : -sp,
-                searchDir > 0 ? -sp : sp);
+      l = (searchDir > 0) ?  SEARCH_SPIN_SPEED_PCT : -SEARCH_SPIN_SPEED_PCT;
+      r = -l;
       break;
     case SEARCH_ARC:    // wide arcs, covers ground while moving
-      motorsSet(searchDir > 0 ? sp : sp / 2,
-                searchDir > 0 ? sp / 2 : sp);
+      l = (searchDir > 0) ? sp : sp / 2;
+      r = (searchDir > 0) ? sp / 2 : sp;
       break;
     case SEARCH_SWEEP:  // figure-8-ish: alternate arcs every cycle
     default:
-      motorsSet(searchDir > 0 ? sp : sp / 3,
-                searchDir > 0 ? sp / 3 : sp);
+      l = (searchDir > 0) ? sp : sp / 3;
+      r = (searchDir > 0) ? sp / 3 : sp;
       break;
   }
+
+  // Continuous-spin watchdog. Only an in-place spin can pirouette forever, so
+  // the clock only runs while the command is a spin; any other command (an arc,
+  // a straight drive, or a stop from another state) clears it, which is why a
+  // fresh target loss always starts a fresh count.
+  if (isSpinCommand(l, r)) {
+    int pl, pr; motorsGetLast(&pl, &pr);
+    if (!isSpinCommand(pl, pr)) spinSince = millis();   // fresh spin -> start clock
+    if (millis() - spinSince >= SEARCH_SPIN_MAX_MS) {
+      // Spun long enough with nothing in sight: stop, reverse, and pause.
+      motorsStop();
+      searchDir = -searchDir;
+      searchModeStart = millis();
+      spinPauseUntil = millis() + SEARCH_SPIN_PAUSE_MS;
+      return;
+    }
+  }
+
+  // Hold the pause after a watchdog trip before spinning again.
+  if ((int32_t)(millis() - spinPauseUntil) < 0) { motorsStop(); return; }
+
+  motorsSet(l, r);
 }
 
 /**
@@ -675,7 +727,10 @@ void stateMachineUpdate() {
       // off the dohyo. Otherwise run the selected search pattern — whose first leg
       // enterSearch() turns toward the last-seen direction.
       if (degraded) {
-        motorsSet(SEARCH_SPEED_PCT, -SEARCH_SPEED_PCT);
+        // Blind spin is the safest way to stumble back onto the opponent and it
+        // can never drive off the dohyo. Routed through the SPIN pattern so it
+        // runs at the slower spin speed and is policed by the spin watchdog.
+        searchUpdate(SEARCH_SPIN);
         break;
       }
       searchUpdate(STRATEGIES[strategyIndex].search);
