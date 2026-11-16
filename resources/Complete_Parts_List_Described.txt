@@ -1,6 +1,6 @@
 ================================================================================
 COMPLETE PARTS LIST — MINI SUMO ROBOT BUILD
-Taxi Project — sabinm1243@gmail.com
+Taxi Project — sabinM1@users.noreply.github.com
 Generated: 2026-07-03
 ================================================================================
 

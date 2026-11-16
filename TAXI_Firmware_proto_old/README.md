@@ -2,7 +2,7 @@
 
 **Platform:** JSUMO XMotion V3 (ATmega32U4, Arduino Leonardo)  
 **Class:** Mini Sumo (500g, 10cm × 10cm)  
-**Author:** sabinm1243@gmail.com  
+**Author:** sabinM1@users.noreply.github.com  
 **Date:** 2026-07-03
 
 ---
